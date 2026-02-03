@@ -1,0 +1,2 @@
+entity_a_id,entity_a_name,entity_a_data,entity_b_id,entity_b_name,entity_b_data,similarity_score,match_reason,suggested_action,decision
+6313262c-2b97-45ed-bf66-ff91673c9e2d,Palantir Technologies Inc,"CAGE:4CYR7 | Loc:Denver, CO | Contracts:0 | Funding:0",f6f42036-699c-4b47-87cf-def09b3e4c3c,Space Exploration Technologies Corp,"Loc:Hawthorne, CA | Contracts:0 | Funding:0",72.2,name_similarity: 72.2,keep_separate,

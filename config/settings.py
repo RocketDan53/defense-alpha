@@ -26,6 +26,11 @@ class Settings(BaseSettings):
         default=f"sqlite:///{PROJECT_ROOT}/data/defense_alpha.db"
     )
 
+    @property
+    def project_root(self) -> Path:
+        """Return project root directory."""
+        return PROJECT_ROOT
+
     # Application
     DEBUG: bool = Field(default=False)
     LOG_LEVEL: str = Field(default="INFO")

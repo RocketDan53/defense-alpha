@@ -85,6 +85,11 @@ class Entity(Base):
     founded_date: Mapped[Optional[date]] = mapped_column(Date)
     technology_tags: Mapped[Optional[dict]] = mapped_column(JSON, default=list)
 
+    # Soft delete for merged entities
+    merged_into_id: Mapped[Optional[str]] = mapped_column(
+        String(36), ForeignKey("entities.id"), nullable=True, index=True
+    )
+
     # Timestamps
     created_at: Mapped[datetime] = mapped_column(
         DateTime, default=func.now(), nullable=False
@@ -103,10 +108,18 @@ class Entity(Base):
     signals: Mapped[list["Signal"]] = relationship(
         back_populates="entity", cascade="all, delete-orphan"
     )
+    merged_into: Mapped[Optional["Entity"]] = relationship(
+        "Entity", remote_side="Entity.id", foreign_keys=[merged_into_id]
+    )
 
     __table_args__ = (
         Index("ix_entities_cage_duns", "cage_code", "duns_number"),
     )
+
+    @property
+    def is_merged(self) -> bool:
+        """Check if this entity has been merged into another."""
+        return self.merged_into_id is not None
 
     def __repr__(self) -> str:
         return f"<Entity(id={self.id}, name={self.canonical_name}, type={self.entity_type.value})>"
@@ -241,3 +254,47 @@ class Signal(Base):
 
     def __repr__(self) -> str:
         return f"<Signal(id={self.id}, type={self.signal_type}, confidence={self.confidence_score})>"
+
+
+class MergeReason(PyEnum):
+    """Reason for entity merge."""
+    IDENTIFIER_MATCH = "identifier_match"
+    NAME_SIMILARITY = "name_similarity"
+    NAME_AND_LOCATION = "name_and_location"
+    NAME_AND_NAICS = "name_and_naics"
+    MANUAL = "manual"
+
+
+class EntityMerge(Base):
+    """
+    Audit trail for entity merges.
+    Tracks all merge decisions for transparency and potential rollback.
+    """
+
+    __tablename__ = "entity_merges"
+
+    id: Mapped[str] = mapped_column(
+        String(36), primary_key=True, default=generate_uuid
+    )
+    source_entity_id: Mapped[str] = mapped_column(
+        String(36), nullable=False, index=True
+    )
+    target_entity_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("entities.id"), nullable=False, index=True
+    )
+    merge_reason: Mapped[MergeReason] = mapped_column(
+        Enum(MergeReason), nullable=False
+    )
+    confidence_score: Mapped[Decimal] = mapped_column(Numeric(3, 2), nullable=False)
+    source_name: Mapped[str] = mapped_column(Text, nullable=False)
+    target_name: Mapped[str] = mapped_column(Text, nullable=False)
+    details: Mapped[Optional[dict]] = mapped_column(JSON)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, default=func.now(), nullable=False
+    )
+
+    # Relationship to target entity
+    target_entity: Mapped["Entity"] = relationship("Entity")
+
+    def __repr__(self) -> str:
+        return f"<EntityMerge(source={self.source_name} -> target={self.target_name}, reason={self.merge_reason.value})>"
