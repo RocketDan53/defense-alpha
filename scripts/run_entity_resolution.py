@@ -34,6 +34,11 @@ def main():
         action="store_true",
         help="Only export review queue, don't auto-merge anything",
     )
+    parser.add_argument(
+        "--verbose", "-v",
+        action="store_true",
+        help="Show detailed comparison information for each pair",
+    )
 
     args = parser.parse_args()
 
@@ -57,14 +62,14 @@ def main():
         if args.export_only:
             # Just find duplicates and export
             print("\nFinding potential duplicates...")
-            stats = resolver.resolve_all_entities(dry_run=True)
+            stats = resolver.resolve_all_entities(dry_run=True, verbose=args.verbose)
             if resolver.review_queue:
                 csv_path = resolver.export_review_queue()
                 print(f"\nExported {len(resolver.review_queue)} potential matches to:")
                 print(f"  {csv_path}")
         else:
             # Run full resolution
-            stats = resolver.resolve_all_entities(dry_run=args.dry_run)
+            stats = resolver.resolve_all_entities(dry_run=args.dry_run, verbose=args.verbose)
 
             # Export review queue if there are items
             if resolver.review_queue:

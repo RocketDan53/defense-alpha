@@ -79,12 +79,31 @@ class EntityResolver:
         resolver.export_review_queue()
     """
 
-    # Common corporate suffixes to normalize
+    # Common corporate suffixes to normalize (order matters - longer patterns first)
     CORPORATE_SUFFIXES = [
-        r"\bInc\.?$", r"\bIncorporated$", r"\bCorp\.?$", r"\bCorporation$",
-        r"\bLLC$", r"\bL\.L\.C\.?$", r"\bLtd\.?$", r"\bLimited$",
-        r"\bLLP$", r"\bL\.L\.P\.?$", r"\bLP$", r"\bL\.P\.?$",
-        r"\bCo\.?$", r"\bCompany$", r"\bPC$", r"\bP\.C\.?$",
+        # Full words first
+        r"\s+Incorporated$",
+        r"\s+Corporation$",
+        r"\s+Limited$",
+        r"\s+Company$",
+        # Then abbreviations
+        r"\s+Inc\.?$",
+        r"\s+Corp\.?$",
+        r"\s+LLC\.?$",
+        r"\s+L\.L\.C\.?$",
+        r"\s+Ltd\.?$",
+        r"\s+LLP\.?$",
+        r"\s+L\.L\.P\.?$",
+        r"\s+LP\.?$",
+        r"\s+L\.P\.?$",
+        r"\s+Co\.?$",
+        r"\s+PC\.?$",
+        r"\s+P\.C\.?$",
+        r"\s+PLLC\.?$",
+        # Handle comma before suffix
+        r",\s*Inc\.?$",
+        r",\s*LLC\.?$",
+        r",\s*Corp\.?$",
         r",\s*$",  # Trailing commas
     ]
 
@@ -97,28 +116,45 @@ class EntityResolver:
         'SD', 'TN', 'TX', 'UT', 'VT', 'VA', 'WA', 'WV', 'WI', 'WY', 'DC'
     }
 
+    # Generic industry words that shouldn't drive matches on their own
+    # If BOTH normalized names reduce to just these words, don't flag as match
+    GENERIC_WORDS = {
+        'aerospace', 'technologies', 'technology', 'systems', 'solutions',
+        'services', 'defense', 'dynamics', 'industries', 'engineering',
+        'international', 'corporation', 'advanced', 'global', 'group',
+        'associates', 'consulting', 'research', 'analytics', 'scientific',
+        'innovations', 'enterprises', 'partners', 'holdings', 'management',
+    }
+
     def __init__(self, db: Session):
         self.db = db
         self.review_queue: list[PotentialMatch] = []
         self.stats = ResolutionStats()
 
-    def normalize_name(self, name: str) -> str:
+    def normalize_name(self, name: str, verbose: bool = False) -> str:
         """
         Normalize company name for comparison.
 
-        - Remove common suffixes (Inc, LLC, Corp, etc.)
+        - Remove common suffixes (Inc, LLC, Corp, Corporation, etc.)
         - Remove punctuation and extra whitespace
         - Lowercase everything
-        - Handle "The XYZ Company" → "xyz company"
+        - Handle "The XYZ Company" → "xyz"
         """
         if not name:
             return ""
 
+        original = name
         normalized = name.strip()
 
-        # Remove corporate suffixes (case insensitive)
-        for pattern in self.CORPORATE_SUFFIXES:
-            normalized = re.sub(pattern, "", normalized, flags=re.IGNORECASE)
+        # Remove corporate suffixes (case insensitive) - apply multiple times
+        # to handle cases like "XYZ Corp." or "XYZ Corporation"
+        for _ in range(3):  # Multiple passes for nested suffixes
+            prev = normalized
+            for pattern in self.CORPORATE_SUFFIXES:
+                normalized = re.sub(pattern, "", normalized, flags=re.IGNORECASE)
+            normalized = normalized.strip()
+            if normalized == prev:
+                break
 
         # Remove punctuation and normalize whitespace
         normalized = re.sub(r"[^\w\s]", " ", normalized)
@@ -131,7 +167,24 @@ class EntityResolver:
         if normalized.startswith("the "):
             normalized = normalized[4:]
 
+        if verbose and original.lower() != normalized:
+            logger.debug(f"  Normalized: '{original}' → '{normalized}'")
+
         return normalized
+
+    def is_only_generic_words(self, normalized_name: str) -> bool:
+        """
+        Check if a normalized name consists only of generic industry words.
+
+        Used to filter out false positive matches like "aerospace" vs "aerospace technologies"
+        which would match highly but are clearly different companies.
+        """
+        if not normalized_name:
+            return True
+
+        words = set(normalized_name.lower().split())
+        # If all words are generic, return True
+        return words.issubset(self.GENERIC_WORDS)
 
     def calculate_similarity(self, name1: str, name2: str) -> float:
         """
@@ -266,6 +319,14 @@ class EntityResolver:
                 best_score = max(best_score, score)
 
             if best_score >= threshold:
+                # Skip if both names are only generic industry words
+                norm1 = self.normalize_name(entity.canonical_name)
+                norm2 = self.normalize_name(candidate.canonical_name)
+
+                if self.is_only_generic_words(norm1) and self.is_only_generic_words(norm2):
+                    # Both names are just generic words - skip this match
+                    continue
+
                 shared_location = self.check_location_match(entity, candidate)
                 shared_naics = self.check_naics_match(entity, candidate)
 
@@ -420,19 +481,22 @@ class EntityResolver:
             self.db.rollback()
             raise
 
-    def resolve_all_entities(self, dry_run: bool = False) -> ResolutionStats:
+    def resolve_all_entities(self, dry_run: bool = False, verbose: bool = False) -> ResolutionStats:
         """
         Run full entity resolution pass.
 
         Decision tree:
         a) If shared identifier (CAGE/DUNS/EIN) → MERGE (confidence: 1.0)
-        b) If name similarity >90 AND same state → MERGE (confidence: 0.95)
-        c) If name similarity >90 AND same NAICS code → MERGE (confidence: 0.90)
-        d) If name similarity 70-90 → FLAG FOR REVIEW
-        e) If name similarity <70 → KEEP SEPARATE
+        b) If normalized names are IDENTICAL → MERGE (confidence: 0.98)
+        c) If name similarity >90 AND same state → MERGE (confidence: 0.95)
+        d) If name similarity >90 AND same NAICS code → MERGE (confidence: 0.90)
+        e) If name similarity >85 (high confidence even without location) → MERGE (confidence: 0.88)
+        f) If name similarity 70-85 AND different locations → FLAG FOR REVIEW
+        g) If name similarity <70 → KEEP SEPARATE
 
         Args:
             dry_run: If True, don't actually merge, just report what would happen
+            verbose: If True, log detailed comparison information
 
         Returns:
             ResolutionStats with merge statistics
@@ -447,6 +511,8 @@ class EntityResolver:
 
         self.stats.total_entities_start = len(entities)
         logger.info(f"Starting entity resolution with {len(entities)} entities")
+        if verbose:
+            logger.info("Verbose mode enabled - showing all comparisons")
 
         processed_pairs = set()
 
@@ -470,6 +536,21 @@ class EntityResolver:
 
                 confidence = match.confidence
 
+                # Get normalized names for comparison
+                norm_a = self.normalize_name(match.entity_a.canonical_name)
+                norm_b = self.normalize_name(match.entity_b.canonical_name)
+                names_identical = (norm_a == norm_b and norm_a != "")
+
+                if verbose:
+                    logger.info(f"\n  Comparing:")
+                    logger.info(f"    A: '{match.entity_a.canonical_name}' → '{norm_a}'")
+                    logger.info(f"    B: '{match.entity_b.canonical_name}' → '{norm_b}'")
+                    logger.info(f"    Similarity: {match.similarity_score:.1f}%")
+                    logger.info(f"    Names identical after normalization: {names_identical}")
+                    logger.info(f"    Shared location: {match.shared_location}")
+                    logger.info(f"    Shared NAICS: {match.shared_naics}")
+                    logger.info(f"    Shared identifiers: {match.shared_identifiers}")
+
                 # Determine merge action based on decision tree
                 if match.shared_identifiers:
                     # a) Identifier match → definitive merge
@@ -491,8 +572,32 @@ class EntityResolver:
                         f"{match.entity_b.canonical_name} ({match.match_reason})"
                     )
 
+                elif names_identical and len(norm_a.split()) >= 2:
+                    # b) Normalized names are IDENTICAL → merge (Corp vs Corporation case)
+                    # Require at least 2 words to avoid over-matching (e.g., "aerospace")
+                    self.stats.high_confidence_merges += 1
+                    if not dry_run:
+                        canonical, duplicate = self.determine_canonical_entity(
+                            match.entity_a, match.entity_b
+                        )
+                        self.merge_entities(
+                            source=duplicate,
+                            target=canonical,
+                            confidence_score=0.98,
+                            merge_reason=MergeReason.NAME_SIMILARITY,
+                            details={
+                                "similarity": match.similarity_score,
+                                "normalized_name": norm_a,
+                                "reason": "identical_after_normalization"
+                            },
+                        )
+                    logger.info(
+                        f"[MERGE-IDENTICAL] {match.entity_a.canonical_name} <-> "
+                        f"{match.entity_b.canonical_name} (normalized: '{norm_a}')"
+                    )
+
                 elif match.similarity_score >= 90 and match.shared_location:
-                    # b) Name >90 AND same state → merge
+                    # c) Name >90 AND same state → merge
                     self.stats.name_location_matches += 1
                     if not dry_run:
                         canonical, duplicate = self.determine_canonical_entity(
@@ -512,7 +617,7 @@ class EntityResolver:
                     )
 
                 elif match.similarity_score >= 90 and match.shared_naics:
-                    # c) Name >90 AND same NAICS → merge
+                    # d) Name >90 AND same NAICS → merge
                     self.stats.name_naics_matches += 1
                     if not dry_run:
                         canonical, duplicate = self.determine_canonical_entity(
@@ -531,8 +636,50 @@ class EntityResolver:
                         f"{match.entity_b.canonical_name} (score: {match.similarity_score:.1f})"
                     )
 
+                elif match.similarity_score >= 95:
+                    # e) Name >95 → very high confidence merge even without location/NAICS
+                    # But flag for review if they have DIFFERENT known locations
+                    loc_a = self.extract_state(match.entity_a.headquarters_location)
+                    loc_b = self.extract_state(match.entity_b.headquarters_location)
+
+                    if loc_a and loc_b and loc_a != loc_b:
+                        # Different known locations - flag for review
+                        self.review_queue.append(match)
+                        self.stats.flagged_for_review += 1
+                        logger.info(
+                            f"[REVIEW-DIFF-LOCATION] {match.entity_a.canonical_name} ({loc_a}) <-> "
+                            f"{match.entity_b.canonical_name} ({loc_b}) (score: {match.similarity_score:.1f})"
+                        )
+                    else:
+                        # No conflicting locations - merge
+                        self.stats.high_confidence_merges += 1
+                        if not dry_run:
+                            canonical, duplicate = self.determine_canonical_entity(
+                                match.entity_a, match.entity_b
+                            )
+                            self.merge_entities(
+                                source=duplicate,
+                                target=canonical,
+                                confidence_score=0.95,
+                                merge_reason=MergeReason.NAME_SIMILARITY,
+                                details={"similarity": match.similarity_score},
+                            )
+                        logger.info(
+                            f"[MERGE-HIGH-SIMILARITY] {match.entity_a.canonical_name} <-> "
+                            f"{match.entity_b.canonical_name} (score: {match.similarity_score:.1f})"
+                        )
+
+                elif match.similarity_score >= 85:
+                    # f) Name 85-95 → flag for review (need more signals)
+                    self.review_queue.append(match)
+                    self.stats.flagged_for_review += 1
+                    logger.info(
+                        f"[REVIEW-HIGH] {match.entity_a.canonical_name} <-> "
+                        f"{match.entity_b.canonical_name} (score: {match.similarity_score:.1f})"
+                    )
+
                 elif match.similarity_score >= 70:
-                    # d) Name 70-90 → flag for review
+                    # f) Name 70-85 → flag for review
                     self.review_queue.append(match)
                     self.stats.flagged_for_review += 1
                     logger.info(
@@ -540,7 +687,7 @@ class EntityResolver:
                         f"{match.entity_b.canonical_name} (score: {match.similarity_score:.1f})"
                     )
 
-                # e) Name <70 → keep separate (no action needed)
+                # g) Name <70 → keep separate (no action needed)
 
         # Calculate final entity count
         final_count = self.db.query(Entity).filter(
