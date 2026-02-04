@@ -31,6 +31,7 @@ SIGNAL_RAPID_GROWTH = "rapid_contract_growth"
 SIGNAL_HIGH_PRIORITY_TECH = "high_priority_technology"
 SIGNAL_MULTI_AGENCY = "multi_agency_interest"
 SIGNAL_OUTSIZED_AWARD = "outsized_award"
+SIGNAL_SBIR_TO_CONTRACT = "sbir_to_contract_transition"
 
 # High-priority technology areas for defense
 HIGH_PRIORITY_TECH = {
@@ -71,6 +72,7 @@ class SignalDetector:
             "high_priority_tech": self.detect_high_priority_tech(),
             "multi_agency": self.detect_multi_agency_interest(cutoff_date),
             "outsized_awards": self.detect_outsized_awards(cutoff_date),
+            "sbir_to_contract": self.detect_sbir_to_contract(),
         }
 
         self.db.commit()
@@ -147,11 +149,12 @@ class SignalDetector:
             has_phase_3 = any(a.event_type == FundingEventType.SBIR_PHASE_3 for a in awards)
 
             # Check for Phase II transition
+            # No recency filter: a Phase I→II transition signals company capability
+            # regardless of when it occurred. detected_date captures timing for consumers.
             phase_2_awards = [a for a in awards if a.event_type == FundingEventType.SBIR_PHASE_2]
-            recent_phase_2 = [a for a in phase_2_awards if a.event_date and a.event_date >= cutoff_date]
 
-            if has_phase_1 and recent_phase_2:
-                latest = max(recent_phase_2, key=lambda x: x.event_date or date.min)
+            if has_phase_1 and phase_2_awards:
+                latest = max(phase_2_awards, key=lambda x: x.event_date or date.min)
                 total_phase_2_value = sum(float(a.amount or 0) for a in phase_2_awards)
 
                 self._create_or_update_signal(
@@ -170,11 +173,11 @@ class SignalDetector:
                 phase_2_count += 1
 
             # Check for Phase III transition (high value - indicates production)
+            # No recency filter: same rationale as Phase II above.
             phase_3_awards = [a for a in awards if a.event_type == FundingEventType.SBIR_PHASE_3]
-            recent_phase_3 = [a for a in phase_3_awards if a.event_date and a.event_date >= cutoff_date]
 
-            if has_phase_2 and recent_phase_3:
-                latest = max(recent_phase_3, key=lambda x: x.event_date or date.min)
+            if has_phase_2 and phase_3_awards:
+                latest = max(phase_3_awards, key=lambda x: x.event_date or date.min)
                 total_phase_3_value = sum(float(a.amount or 0) for a in phase_3_awards)
 
                 self._create_or_update_signal(
@@ -473,6 +476,104 @@ class SignalDetector:
                     break  # One signal per entity
 
         return {"outsized_award_signals": count}
+
+    def detect_sbir_to_contract(self) -> dict:
+        """
+        Detect entities that transitioned from SBIR R&D to real procurement contracts.
+        Indicates successful commercialization of SBIR-funded technology.
+        """
+        count = 0
+
+        # Get startups with SBIR awards
+        sbir_entity_ids = (
+            self.db.query(FundingEvent.entity_id)
+            .filter(
+                FundingEvent.event_type.in_([
+                    FundingEventType.SBIR_PHASE_1,
+                    FundingEventType.SBIR_PHASE_2,
+                    FundingEventType.SBIR_PHASE_3,
+                ])
+            )
+            .distinct()
+        )
+
+        entities = self.db.query(Entity).filter(
+            Entity.id.in_(sbir_entity_ids.scalar_subquery()),
+            Entity.merged_into_id.is_(None),
+        ).all()
+
+        for entity in entities:
+            contracts = self.db.query(Contract).filter(
+                Contract.entity_id == entity.id,
+                Contract.contract_value.isnot(None),
+                Contract.contract_value > 0,
+            ).order_by(Contract.award_date).all()
+
+            if not contracts:
+                continue
+
+            # Get earliest SBIR award date for this entity
+            earliest_sbir = self.db.query(func.min(FundingEvent.event_date)).filter(
+                FundingEvent.entity_id == entity.id,
+                FundingEvent.event_type.in_([
+                    FundingEventType.SBIR_PHASE_1,
+                    FundingEventType.SBIR_PHASE_2,
+                    FundingEventType.SBIR_PHASE_3,
+                ]),
+            ).scalar()
+
+            # Contracts that came after SBIR activity
+            if earliest_sbir:
+                post_sbir = [c for c in contracts if c.award_date and c.award_date > earliest_sbir]
+            else:
+                # No dates on SBIR awards — count all contracts
+                post_sbir = contracts
+
+            if not post_sbir:
+                continue
+
+            total_contract_value = sum(float(c.contract_value) for c in post_sbir)
+            latest_contract = max(post_sbir, key=lambda c: c.award_date or date.min)
+
+            # Higher confidence if contract value is substantial relative to SBIR
+            total_sbir_value = self.db.query(func.sum(FundingEvent.amount)).filter(
+                FundingEvent.entity_id == entity.id,
+                FundingEvent.event_type.in_([
+                    FundingEventType.SBIR_PHASE_1,
+                    FundingEventType.SBIR_PHASE_2,
+                    FundingEventType.SBIR_PHASE_3,
+                ]),
+            ).scalar() or Decimal(0)
+
+            ratio = float(total_contract_value) / max(float(total_sbir_value), 1)
+            confidence = min(HIGH_CONFIDENCE, Decimal(str(0.6 + min(ratio, 3) * 0.1)))
+
+            self._create_or_update_signal(
+                entity_id=entity.id,
+                signal_type=SIGNAL_SBIR_TO_CONTRACT,
+                confidence=confidence,
+                detected_date=latest_contract.award_date or date.today(),
+                evidence={
+                    "sbir_award_count": self.db.query(FundingEvent).filter(
+                        FundingEvent.entity_id == entity.id,
+                        FundingEvent.event_type.in_([
+                            FundingEventType.SBIR_PHASE_1,
+                            FundingEventType.SBIR_PHASE_2,
+                            FundingEventType.SBIR_PHASE_3,
+                        ]),
+                    ).count(),
+                    "total_sbir_value": float(total_sbir_value),
+                    "post_sbir_contract_count": len(post_sbir),
+                    "total_contract_value": total_contract_value,
+                    "contract_to_sbir_ratio": round(ratio, 2),
+                    "earliest_sbir_date": str(earliest_sbir),
+                    "latest_contract_date": str(latest_contract.award_date),
+                    "entity_name": entity.canonical_name,
+                },
+            )
+            count += 1
+
+        return {"sbir_to_contract_signals": count}
 
 
 def get_signal_summary(db: Session) -> dict:
