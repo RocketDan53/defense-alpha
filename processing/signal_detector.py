@@ -34,6 +34,11 @@ SIGNAL_OUTSIZED_AWARD = "outsized_award"
 SIGNAL_SBIR_TO_CONTRACT = "sbir_to_contract_transition"
 SIGNAL_SBIR_TO_VC = "sbir_to_vc_raise"
 
+# Timing-based signals
+SIGNAL_SBIR_GRADUATION_SPEED = "sbir_graduation_speed"
+SIGNAL_TIME_TO_CONTRACT = "time_to_contract"
+SIGNAL_FUNDING_VELOCITY = "funding_velocity"
+
 # Negative signals (risk indicators)
 SIGNAL_SBIR_STALLED = "sbir_stalled"
 SIGNAL_CUSTOMER_CONCENTRATION = "customer_concentration"
@@ -81,6 +86,9 @@ class SignalDetector:
             "sbir_to_vc": self.detect_sbir_to_vc_raise(),
             "sbir_stalled": self.detect_sbir_stalled(),
             "customer_concentration": self.detect_customer_concentration(),
+            "sbir_graduation_speed": self.detect_sbir_graduation_speed(),
+            "time_to_contract": self.detect_time_to_contract(),
+            "funding_velocity": self.detect_funding_velocity(),
         }
 
         self.db.commit()
@@ -813,6 +821,261 @@ class SignalDetector:
                 count += 1
 
         return {"customer_concentration_signals": count}
+
+    def detect_sbir_graduation_speed(self) -> dict:
+        """
+        Measure days from first Phase I to first Phase II award.
+        Signal fires for all companies that graduated; confidence is higher
+        for faster graduations (below median).
+        """
+        count = 0
+
+        # First pass: collect all graduation durations to compute median
+        durations = []  # (entity, days, first_p1_date, first_p2_date)
+
+        phase2_entity_ids = (
+            self.db.query(FundingEvent.entity_id)
+            .filter(FundingEvent.event_type == FundingEventType.SBIR_PHASE_2)
+            .distinct()
+        )
+
+        entities = self.db.query(Entity).filter(
+            Entity.id.in_(phase2_entity_ids.scalar_subquery()),
+            Entity.merged_into_id.is_(None),
+        ).all()
+
+        for entity in entities:
+            first_p1 = self.db.query(func.min(FundingEvent.event_date)).filter(
+                FundingEvent.entity_id == entity.id,
+                FundingEvent.event_type == FundingEventType.SBIR_PHASE_1,
+                FundingEvent.event_date.isnot(None),
+            ).scalar()
+
+            first_p2 = self.db.query(func.min(FundingEvent.event_date)).filter(
+                FundingEvent.entity_id == entity.id,
+                FundingEvent.event_type == FundingEventType.SBIR_PHASE_2,
+                FundingEvent.event_date.isnot(None),
+            ).scalar()
+
+            if first_p1 and first_p2 and first_p2 > first_p1:
+                days = (first_p2 - first_p1).days
+                durations.append((entity, days, first_p1, first_p2))
+
+        if not durations:
+            return {"sbir_graduation_speed_signals": 0}
+
+        # Compute median
+        sorted_days = sorted(d[1] for d in durations)
+        mid = len(sorted_days) // 2
+        if len(sorted_days) % 2 == 0:
+            median_days = (sorted_days[mid - 1] + sorted_days[mid]) / 2
+        else:
+            median_days = sorted_days[mid]
+
+        # Second pass: create signals
+        for entity, days, first_p1, first_p2 in durations:
+            # Faster = higher confidence
+            if days <= median_days:
+                # Below median: scale 0.75–0.90 based on how fast
+                speed_ratio = days / max(median_days, 1)
+                confidence = min(HIGH_CONFIDENCE, Decimal(str(0.90 - speed_ratio * 0.15)))
+            else:
+                # Above median: still a signal but lower confidence
+                slowness = min(days / max(median_days, 1), 3.0)
+                confidence = max(LOW_CONFIDENCE, Decimal(str(0.75 - (slowness - 1) * 0.10)))
+
+            self._create_or_update_signal(
+                entity_id=entity.id,
+                signal_type=SIGNAL_SBIR_GRADUATION_SPEED,
+                confidence=confidence,
+                detected_date=first_p2,
+                evidence={
+                    "days_to_graduate": days,
+                    "first_phase_1_date": str(first_p1),
+                    "first_phase_2_date": str(first_p2),
+                    "median_days": round(median_days),
+                    "faster_than_median": days <= median_days,
+                    "entity_name": entity.canonical_name,
+                },
+            )
+            count += 1
+
+        return {
+            "sbir_graduation_speed_signals": count,
+            "median_graduation_days": round(median_days),
+        }
+
+    def detect_time_to_contract(self) -> dict:
+        """
+        Measure days from first SBIR award to first real procurement contract.
+        Faster transitions indicate strong commercialization capability.
+        """
+        count = 0
+
+        durations = []  # (entity, days, first_sbir_date, first_contract_date)
+
+        # Entities with both SBIR awards and contracts
+        sbir_entity_ids = (
+            self.db.query(FundingEvent.entity_id)
+            .filter(
+                FundingEvent.event_type.in_([
+                    FundingEventType.SBIR_PHASE_1,
+                    FundingEventType.SBIR_PHASE_2,
+                    FundingEventType.SBIR_PHASE_3,
+                ])
+            )
+            .distinct()
+        )
+
+        contract_entity_ids = (
+            self.db.query(Contract.entity_id)
+            .filter(Contract.contract_value > 0)
+            .distinct()
+        )
+
+        entities = self.db.query(Entity).filter(
+            Entity.id.in_(sbir_entity_ids.scalar_subquery()),
+            Entity.id.in_(contract_entity_ids.scalar_subquery()),
+            Entity.merged_into_id.is_(None),
+        ).all()
+
+        for entity in entities:
+            first_sbir = self.db.query(func.min(FundingEvent.event_date)).filter(
+                FundingEvent.entity_id == entity.id,
+                FundingEvent.event_type.in_([
+                    FundingEventType.SBIR_PHASE_1,
+                    FundingEventType.SBIR_PHASE_2,
+                    FundingEventType.SBIR_PHASE_3,
+                ]),
+                FundingEvent.event_date.isnot(None),
+            ).scalar()
+
+            first_contract = self.db.query(func.min(Contract.award_date)).filter(
+                Contract.entity_id == entity.id,
+                Contract.contract_value > 0,
+                Contract.award_date.isnot(None),
+            ).scalar()
+
+            if first_sbir and first_contract and first_contract > first_sbir:
+                days = (first_contract - first_sbir).days
+                durations.append((entity, days, first_sbir, first_contract))
+
+        if not durations:
+            return {"time_to_contract_signals": 0}
+
+        sorted_days = sorted(d[1] for d in durations)
+        mid = len(sorted_days) // 2
+        if len(sorted_days) % 2 == 0:
+            median_days = (sorted_days[mid - 1] + sorted_days[mid]) / 2
+        else:
+            median_days = sorted_days[mid]
+
+        for entity, days, first_sbir, first_contract in durations:
+            if days <= median_days:
+                speed_ratio = days / max(median_days, 1)
+                confidence = min(HIGH_CONFIDENCE, Decimal(str(0.90 - speed_ratio * 0.15)))
+            else:
+                slowness = min(days / max(median_days, 1), 3.0)
+                confidence = max(LOW_CONFIDENCE, Decimal(str(0.75 - (slowness - 1) * 0.10)))
+
+            self._create_or_update_signal(
+                entity_id=entity.id,
+                signal_type=SIGNAL_TIME_TO_CONTRACT,
+                confidence=confidence,
+                detected_date=first_contract,
+                evidence={
+                    "days_to_contract": days,
+                    "first_sbir_date": str(first_sbir),
+                    "first_contract_date": str(first_contract),
+                    "median_days": round(median_days),
+                    "faster_than_median": days <= median_days,
+                    "entity_name": entity.canonical_name,
+                },
+            )
+            count += 1
+
+        return {
+            "time_to_contract_signals": count,
+            "median_time_to_contract_days": round(median_days),
+        }
+
+    def detect_funding_velocity(self) -> dict:
+        """
+        Detect companies with high private capital fundraising velocity.
+        2+ Reg D filings within 18 months = high velocity signal.
+        """
+        count = 0
+        velocity_window_days = 548  # ~18 months
+
+        regd_entity_ids = (
+            self.db.query(FundingEvent.entity_id)
+            .filter(FundingEvent.event_type == FundingEventType.REG_D_FILING)
+            .group_by(FundingEvent.entity_id)
+            .having(func.count(FundingEvent.id) >= 2)
+        )
+
+        entities = self.db.query(Entity).filter(
+            Entity.id.in_(regd_entity_ids.scalar_subquery()),
+            Entity.merged_into_id.is_(None),
+        ).all()
+
+        for entity in entities:
+            filings = self.db.query(FundingEvent).filter(
+                FundingEvent.entity_id == entity.id,
+                FundingEvent.event_type == FundingEventType.REG_D_FILING,
+                FundingEvent.event_date.isnot(None),
+            ).order_by(FundingEvent.event_date).all()
+
+            if len(filings) < 2:
+                continue
+
+            # Find the tightest window with 2+ filings
+            best_window_filings = []
+            for i in range(len(filings)):
+                window = [filings[i]]
+                for j in range(i + 1, len(filings)):
+                    span = (filings[j].event_date - filings[i].event_date).days
+                    if span <= velocity_window_days:
+                        window.append(filings[j])
+                if len(window) >= 2 and len(window) > len(best_window_filings):
+                    best_window_filings = window
+
+            if len(best_window_filings) < 2:
+                continue
+
+            window_start = best_window_filings[0].event_date
+            window_end = best_window_filings[-1].event_date
+            window_days = (window_end - window_start).days
+            total_raised = sum(float(f.amount or 0) for f in best_window_filings)
+
+            # Confidence: more filings in window + larger amounts = higher
+            confidence = Decimal("0.70")
+            if len(best_window_filings) >= 3:
+                confidence += Decimal("0.10")
+            if total_raised >= 10_000_000:
+                confidence += Decimal("0.05")
+            if total_raised >= 50_000_000:
+                confidence += Decimal("0.05")
+            confidence = min(HIGH_CONFIDENCE, confidence)
+
+            self._create_or_update_signal(
+                entity_id=entity.id,
+                signal_type=SIGNAL_FUNDING_VELOCITY,
+                confidence=confidence,
+                detected_date=window_end,
+                evidence={
+                    "filings_in_window": len(best_window_filings),
+                    "window_days": window_days,
+                    "window_start": str(window_start),
+                    "window_end": str(window_end),
+                    "total_raised_in_window": total_raised,
+                    "total_regd_filings": len(filings),
+                    "entity_name": entity.canonical_name,
+                },
+            )
+            count += 1
+
+        return {"funding_velocity_signals": count}
 
 
 def get_signal_summary(db: Session) -> dict:
