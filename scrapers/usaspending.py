@@ -342,7 +342,7 @@ class USASpendingScraper:
             contract = Contract(
                 entity_id=entity.id,
                 contract_number=contract_number,
-                contracting_agency=award.get("Awarding Agency", ""),
+                contracting_agency=award.get("Awarding Sub Agency") or award.get("Awarding Agency", ""),
                 contract_value=amount,
                 award_date=award_date,
                 period_of_performance_start=pop_start,

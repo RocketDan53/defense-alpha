@@ -32,6 +32,7 @@ SIGNAL_HIGH_PRIORITY_TECH = "high_priority_technology"
 SIGNAL_MULTI_AGENCY = "multi_agency_interest"
 SIGNAL_OUTSIZED_AWARD = "outsized_award"
 SIGNAL_SBIR_TO_CONTRACT = "sbir_to_contract_transition"
+SIGNAL_SBIR_TO_VC = "sbir_to_vc_raise"
 
 # High-priority technology areas for defense
 HIGH_PRIORITY_TECH = {
@@ -73,6 +74,7 @@ class SignalDetector:
             "multi_agency": self.detect_multi_agency_interest(cutoff_date),
             "outsized_awards": self.detect_outsized_awards(cutoff_date),
             "sbir_to_contract": self.detect_sbir_to_contract(),
+            "sbir_to_vc": self.detect_sbir_to_vc_raise(),
         }
 
         self.db.commit()
@@ -365,10 +367,10 @@ class SignalDetector:
         ).all()
 
         for entity in startups:
-            # Get distinct agencies for recent contracts
+            # Get distinct agencies across all contracts (no recency filter —
+            # multi-agency interest is a structural signal about the company)
             agencies = self.db.query(Contract.contracting_agency).filter(
                 Contract.entity_id == entity.id,
-                Contract.award_date >= cutoff_date,
                 Contract.contracting_agency.isnot(None)
             ).distinct().all()
 
@@ -449,11 +451,10 @@ class SignalDetector:
             if avg < 50000:  # Skip if average is too small
                 continue
 
-            # Check for outsized recent awards
+            # Check for outsized awards (no recency filter — an outsized award
+            # signals breakout success regardless of when it occurred)
             for contract in all_contracts:
-                if (contract.award_date and
-                    contract.award_date >= cutoff_date and
-                    float(contract.contract_value) >= avg * size_multiplier):
+                if float(contract.contract_value) >= avg * size_multiplier:
 
                     ratio = float(contract.contract_value) / avg
                     confidence = min(HIGH_CONFIDENCE, Decimal(str(0.6 + (ratio - 3) * 0.05)))
@@ -574,6 +575,108 @@ class SignalDetector:
             count += 1
 
         return {"sbir_to_contract_signals": count}
+
+    def detect_sbir_to_vc_raise(self) -> dict:
+        """
+        Detect entities with both SBIR awards and Reg D (private capital) filings.
+        Signals that smart money is validating government-funded R&D.
+        Higher confidence when the VC raise came after SBIR awards.
+        """
+        count = 0
+
+        # Find entities that have both SBIR awards and Reg D filings
+        sbir_entities = (
+            self.db.query(FundingEvent.entity_id)
+            .filter(
+                FundingEvent.event_type.in_([
+                    FundingEventType.SBIR_PHASE_1,
+                    FundingEventType.SBIR_PHASE_2,
+                    FundingEventType.SBIR_PHASE_3,
+                ])
+            )
+            .distinct()
+        )
+
+        regd_entities = (
+            self.db.query(FundingEvent.entity_id)
+            .filter(FundingEvent.event_type == FundingEventType.REG_D_FILING)
+            .distinct()
+        )
+
+        entities = self.db.query(Entity).filter(
+            Entity.id.in_(sbir_entities.scalar_subquery()),
+            Entity.id.in_(regd_entities.scalar_subquery()),
+            Entity.merged_into_id.is_(None),
+        ).all()
+
+        for entity in entities:
+            # Get SBIR summary
+            sbir_awards = self.db.query(FundingEvent).filter(
+                FundingEvent.entity_id == entity.id,
+                FundingEvent.event_type.in_([
+                    FundingEventType.SBIR_PHASE_1,
+                    FundingEventType.SBIR_PHASE_2,
+                    FundingEventType.SBIR_PHASE_3,
+                ]),
+            ).all()
+
+            earliest_sbir = min(
+                (a.event_date for a in sbir_awards if a.event_date),
+                default=None,
+            )
+            total_sbir = sum(float(a.amount or 0) for a in sbir_awards)
+
+            # Get Reg D summary
+            regd_filings = self.db.query(FundingEvent).filter(
+                FundingEvent.entity_id == entity.id,
+                FundingEvent.event_type == FundingEventType.REG_D_FILING,
+            ).all()
+
+            total_regd = sum(float(f.amount or 0) for f in regd_filings)
+            latest_regd = max(
+                (f.event_date for f in regd_filings if f.event_date),
+                default=None,
+            )
+
+            # Confidence scoring
+            # Base: 0.70 for having both SBIR and Reg D
+            # Bonus: +0.10 if VC raise came after SBIR (temporal validation)
+            # Bonus: +0.05 if multiple Reg D filings (sustained investor interest)
+            # Bonus: +0.05 if Reg D total > $10M (significant capital)
+            confidence = Decimal("0.70")
+
+            vc_after_sbir = False
+            if earliest_sbir and latest_regd and latest_regd > earliest_sbir:
+                confidence += Decimal("0.10")
+                vc_after_sbir = True
+
+            if len(regd_filings) >= 2:
+                confidence += Decimal("0.05")
+
+            if total_regd >= 10_000_000:
+                confidence += Decimal("0.05")
+
+            confidence = min(HIGH_CONFIDENCE, confidence)
+
+            self._create_or_update_signal(
+                entity_id=entity.id,
+                signal_type=SIGNAL_SBIR_TO_VC,
+                confidence=confidence,
+                detected_date=latest_regd or date.today(),
+                evidence={
+                    "sbir_award_count": len(sbir_awards),
+                    "total_sbir_value": total_sbir,
+                    "earliest_sbir_date": str(earliest_sbir),
+                    "regd_filing_count": len(regd_filings),
+                    "total_regd_value": total_regd,
+                    "latest_regd_date": str(latest_regd),
+                    "vc_after_sbir": vc_after_sbir,
+                    "entity_name": entity.canonical_name,
+                },
+            )
+            count += 1
+
+        return {"sbir_to_vc_signals": count}
 
 
 def get_signal_summary(db: Session) -> dict:

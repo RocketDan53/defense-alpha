@@ -45,6 +45,7 @@ class FundingEventType(PyEnum):
     SBIR_PHASE_3 = "sbir_phase_3"
     CONTRACT = "contract"
     ACQUISITION = "acquisition"
+    REG_D_FILING = "reg_d_filing"
 
 
 class SignalStatus(PyEnum):
