@@ -34,6 +34,10 @@ SIGNAL_OUTSIZED_AWARD = "outsized_award"
 SIGNAL_SBIR_TO_CONTRACT = "sbir_to_contract_transition"
 SIGNAL_SBIR_TO_VC = "sbir_to_vc_raise"
 
+# Negative signals (risk indicators)
+SIGNAL_SBIR_STALLED = "sbir_stalled"
+SIGNAL_CUSTOMER_CONCENTRATION = "customer_concentration"
+
 # High-priority technology areas for defense
 HIGH_PRIORITY_TECH = {
     "ai_ml", "autonomy", "quantum", "hypersonics", "cyber",
@@ -75,6 +79,8 @@ class SignalDetector:
             "outsized_awards": self.detect_outsized_awards(cutoff_date),
             "sbir_to_contract": self.detect_sbir_to_contract(),
             "sbir_to_vc": self.detect_sbir_to_vc_raise(),
+            "sbir_stalled": self.detect_sbir_stalled(),
+            "customer_concentration": self.detect_customer_concentration(),
         }
 
         self.db.commit()
@@ -677,6 +683,136 @@ class SignalDetector:
             count += 1
 
         return {"sbir_to_vc_signals": count}
+
+    def detect_sbir_stalled(self) -> dict:
+        """
+        Detect entities with 2+ Phase I SBIR awards but zero Phase II.
+        Indicates company is stuck in early R&D and failing to advance.
+        This is a NEGATIVE signal (risk indicator).
+        """
+        count = 0
+
+        # Get startups with SBIR Phase I awards
+        phase1_entity_ids = (
+            self.db.query(FundingEvent.entity_id)
+            .filter(FundingEvent.event_type == FundingEventType.SBIR_PHASE_1)
+            .group_by(FundingEvent.entity_id)
+            .having(func.count(FundingEvent.id) >= 2)
+        )
+
+        entities = self.db.query(Entity).filter(
+            Entity.id.in_(phase1_entity_ids.scalar_subquery()),
+            Entity.merged_into_id.is_(None),
+        ).all()
+
+        for entity in entities:
+            # Check for any Phase II or Phase III awards
+            advanced_count = self.db.query(func.count(FundingEvent.id)).filter(
+                FundingEvent.entity_id == entity.id,
+                FundingEvent.event_type.in_([
+                    FundingEventType.SBIR_PHASE_2,
+                    FundingEventType.SBIR_PHASE_3,
+                ]),
+            ).scalar() or 0
+
+            if advanced_count > 0:
+                continue
+
+            # Get Phase I details
+            phase1_awards = self.db.query(FundingEvent).filter(
+                FundingEvent.entity_id == entity.id,
+                FundingEvent.event_type == FundingEventType.SBIR_PHASE_1,
+            ).all()
+
+            total_phase1_value = sum(float(a.amount or 0) for a in phase1_awards)
+            earliest = min((a.event_date for a in phase1_awards if a.event_date), default=None)
+            latest = max((a.event_date for a in phase1_awards if a.event_date), default=None)
+
+            # Higher confidence with more Phase I awards (more evidence of stalling)
+            confidence = min(HIGH_CONFIDENCE, Decimal(str(0.60 + len(phase1_awards) * 0.05)))
+
+            self._create_or_update_signal(
+                entity_id=entity.id,
+                signal_type=SIGNAL_SBIR_STALLED,
+                confidence=confidence,
+                detected_date=latest or date.today(),
+                evidence={
+                    "phase_1_count": len(phase1_awards),
+                    "phase_2_count": 0,
+                    "total_phase_1_value": total_phase1_value,
+                    "earliest_phase_1": str(earliest),
+                    "latest_phase_1": str(latest),
+                    "entity_name": entity.canonical_name,
+                },
+            )
+            count += 1
+
+        return {"sbir_stalled_signals": count}
+
+    def detect_customer_concentration(self) -> dict:
+        """
+        Detect entities where >80% of contract value comes from a single agency.
+        Indicates revenue concentration risk.
+        This is a NEGATIVE signal (risk indicator).
+        """
+        count = 0
+        concentration_threshold = 0.80
+
+        entities = self.db.query(Entity).filter(
+            Entity.entity_type == EntityType.STARTUP,
+            Entity.merged_into_id.is_(None),
+        ).all()
+
+        for entity in entities:
+            # Get contracts with valid agency and value
+            contracts = self.db.query(Contract).filter(
+                Contract.entity_id == entity.id,
+                Contract.contract_value.isnot(None),
+                Contract.contract_value > 0,
+                Contract.contracting_agency.isnot(None),
+            ).all()
+
+            if len(contracts) < 2:
+                continue
+
+            # Aggregate value by agency
+            agency_totals = {}
+            total_value = Decimal(0)
+            for c in contracts:
+                agency = c.contracting_agency
+                agency_totals[agency] = agency_totals.get(agency, Decimal(0)) + c.contract_value
+                total_value += c.contract_value
+
+            if total_value == 0:
+                continue
+
+            # Find dominant agency
+            top_agency = max(agency_totals, key=agency_totals.get)
+            top_value = agency_totals[top_agency]
+            concentration = float(top_value) / float(total_value)
+
+            if concentration >= concentration_threshold:
+                # Higher concentration = higher confidence in the risk signal
+                confidence = min(HIGH_CONFIDENCE, Decimal(str(0.60 + (concentration - 0.80) * 1.5)))
+
+                self._create_or_update_signal(
+                    entity_id=entity.id,
+                    signal_type=SIGNAL_CUSTOMER_CONCENTRATION,
+                    confidence=confidence,
+                    detected_date=date.today(),
+                    evidence={
+                        "dominant_agency": top_agency,
+                        "concentration_pct": round(concentration * 100, 1),
+                        "dominant_agency_value": float(top_value),
+                        "total_contract_value": float(total_value),
+                        "total_contracts": len(contracts),
+                        "unique_agencies": len(agency_totals),
+                        "entity_name": entity.canonical_name,
+                    },
+                )
+                count += 1
+
+        return {"customer_concentration_signals": count}
 
 
 def get_signal_summary(db: Session) -> dict:
