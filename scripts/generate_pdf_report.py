@@ -30,6 +30,14 @@ def safe_text(text):
     """Sanitize text for latin-1 compatible PDF fonts."""
     if not isinstance(text, str):
         text = str(text)
+    # Replace common Unicode characters with latin-1 safe equivalents
+    text = text.replace("\u2014", " - ")   # em-dash
+    text = text.replace("\u2013", "-")      # en-dash
+    text = text.replace("\u2018", "'")      # left single quote
+    text = text.replace("\u2019", "'")      # right single quote
+    text = text.replace("\u201c", '"')      # left double quote
+    text = text.replace("\u201d", '"')      # right double quote
+    text = text.replace("\u2026", "...")     # ellipsis
     try:
         text.encode("latin-1")
         return text
