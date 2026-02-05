@@ -8,9 +8,9 @@
 
 ## Analyst's Note
 
-Defense Alpha identified 10 emerging companies with active programs in RF & Communications, backed by 27 SBIR awards totaling $23.2M and $51.5M in disclosed private capital across 4 companies. Sub-segment activity clusters around mesh networking (4), tactical communications (2), radar & sensing (2). 7 of 10 sit at Seed / Early stage (2 at Series A, 1 at Series B+) — a fragmented, early-stage vertical with consolidation opportunity.
+Defense Alpha identified 10 emerging companies with active programs in RF & Communications, backed by 26 SBIR awards totaling $27.3M and $60.0M in disclosed private capital across 5 companies. Sub-segment activity clusters around beamforming & directed RF (3), radar & sensing (2), mesh networking (2). 5 of 10 sit at Seed / Early stage (4 at Series A, 1 at Series B+) — a fragmented, early-stage vertical with consolidation opportunity.
 
-Momentum is concentrated in companies pairing SBIR validation with private capital: HAVENLOCK INC, ZENITH AEROSPACE INC, MATRIXSPACE, INC. 7 companies hold Phase II awards but none have converted to production contracts — a transition gap that represents both risk and opportunity for partners who can accelerate commercialization. Watch HAVENLOCK INC, TETRATE.IO, INC., ZENITH AEROSPACE INC for near-term movement based on acceleration signals.
+Momentum is concentrated in companies pairing SBIR validation with private capital: ZENITH AEROSPACE INC, AscendArc, Inc., MATRIXSPACE, INC. A transition gap is visible: 6 hold Phase II awards while only 1 has won production contracts, suggesting the prototype-to-procurement valley of death remains a bottleneck. Watch ZENITH AEROSPACE INC, AscendArc, Inc., NANTRAK TACTICAL LLC for near-term movement based on acceleration signals.
 
 Engage at the SBIR Phase II inflection point, where technology is government-validated but commercialization support is scarce — these companies are most responsive to strategic partnerships and most likely to convert to program-of-record suppliers.
 
@@ -20,76 +20,49 @@ Engage at the SBIR Phase II inflection point, where technology is government-val
 
 | # | Company | Stage | Composite | Relevance | Key Signal | Latest Activity |
 |---|---------|-------|-----------|-----------|------------|-----------------|
-| 1 | **HAVENLOCK INC** | Seed / Early | 4.96 | 0.645 | SBIR + VC Raise | 2024-08-13 |
-| 2 | **TETRATE.IO, INC.** | Seed / Early | 3.28 | 0.472 | SBIR Phase II | 2024-08-01 |
-| 3 | **ZENITH AEROSPACE INC** | Series A | 3.60 | 0.412 | SBIR + VC Raise | 2024-08-26 |
+| 1 | **PHASE SENSITIVE INNOVATIONS INC** | Series A | 5.47 | 0.342 | SBIR->Contract | 2024-09-01 |
+| 2 | **ZENITH AEROSPACE INC** | Series A | 3.60 | 0.412 | SBIR + VC Raise | 2024-08-26 |
+| 3 | **AscendArc, Inc.** | Seed / Early | 4.50 | 0.326 | SBIR + VC Raise | 2024-08-22 |
 | 4 | **NANTRAK TACTICAL LLC** | Seed / Early | 3.25 | 0.403 | SBIR Phase II | 2024-09-11 |
 | 5 | **MATRIXSPACE, INC** | Series B+ | 1.50 | 0.528 | SBIR + VC Raise | 2024-07-01 |
 | 6 | **TERASPATIAL INC** | Series A | 2.90 | 0.395 | SBIR + VC Raise | 2024-09-06 |
-| 7 | **THRUST AI LLC** | Seed / Early | 3.17 | 0.370 | SBIR Phase II | 2024-08-28 |
-| 8 | **NEXTGEN AERONAUTICS, INC.** | Seed / Early | 2.05 | 0.442 | SBIR Phase II | 2024-09-23 |
-| 9 | **FOURTH STATE COMMUNICATIONS, LLC** | Seed / Early | 2.55 | 0.354 | SBIR Phase II | 2024-05-10 |
-| 10 | **SOLSTAR SPACE COMPANY** | Seed / Early | 2.05 | 0.395 | SBIR Phase II | 2024-05-14 |
+| 7 | **K2 SPACE CORPORATION** | Series A | 3.25 | 0.311 | SBIR + VC Raise | 2024-09-18 |
+| 8 | **FOURTH STATE COMMUNICATIONS, LLC** | Seed / Early | 2.55 | 0.354 | SBIR Phase II | 2024-05-10 |
+| 9 | **SOLSTAR SPACE COMPANY** | Seed / Early | 2.05 | 0.395 | SBIR Phase II | 2024-05-14 |
+| 10 | **XL SCIENTIFIC LLC** | Seed / Early | 2.25 | 0.374 | SBIR Phase II | 2024-08-26 |
 
 ---
 
 ## Detailed Prospect Profiles
 
-### 1. HAVENLOCK INC
+### 1. PHASE SENSITIVE INNOVATIONS INC
 
-**Location:** NASHVILLE, Tennessee
-**Website:** https://havenlock.com/
-**Estimated Stage:** Seed / Early  
-**Composite Score:** 4.96 (+5.0 / 0.0)  
-**Technology Relevance:** 0.645
+**Location:** NEWARK, Delaware
+**Website:** http://www.phasesensitiveinc.com/
+**Estimated Stage:** Series A  
+**Composite Score:** 5.47 (+5.5 / 0.0)  
+**Technology Relevance:** 0.342
 
 **Technology Focus:**
-- Deployable Security Solution with Networked Mesh Radios for Expeditionary Security & Communications
-- Enhancing AFSFC Security Infrastructure with Haven Lockdown and Alarm.com
+- RADS - Radar Disruption Systems
+- Broadband Optical Combs in Thin Film Lithium Niobate
 
 **Intelligence Signals:**
-- [+] SBIR + VC Raise (score: 1.50)
+- [+] SBIR->Contract (score: 2.70)
+- [+] Fast Time-to-Contract (score: 1.42)
 - [+] SBIR Phase II (score: 1.35)
-- [+] Fast SBIR Graduation (score: 1.06)
-- [+] Funding Velocity (score: 1.05)
 
 **Financial Summary:**
-- 2 SBIR awards ($1.8M)
-- Private capital: $2.4M
+- 2 SBIR awards ($2.0M)
+- 1 contracts ($8.9M)
 
 **Recent Activity:**
-- Latest SBIR: 2024-08-13
-- Latest Reg D filing: 2023-02-17
+- Latest SBIR: 2024-09-01
+- Latest contract: 2024-07-30
 
 ---
 
-### 2. TETRATE.IO, INC.
-
-**Location:** MILPITAS, California
-**Website:** http://www.tetrate.io
-**Estimated Stage:** Seed / Early  
-**Composite Score:** 3.28 (+3.3 / 0.0)  
-**Technology Relevance:** 0.472
-
-**Technology Focus:**
-- Tetrate Ambient Mesh: A Critical Tool for the United States Air Force in Maintaining Secure and Optimized Communication During Wartime
-- Fortifying the Digital Battlefield: Implementing Secure Technical Implementation Guide (STIG) for Warfighter Network Communications
-- Zero Trust Compliance Framework Built on Open Security Controls Assessment Language (OSCAL)
-
-**Intelligence Signals:**
-- [+] SBIR Phase II (score: 1.35)
-- [+] Fast SBIR Graduation (score: 1.12)
-- [+] High-Priority Tech (score: 0.80)
-
-**Financial Summary:**
-- 4 SBIR awards ($3.3M)
-
-**Recent Activity:**
-- Latest SBIR: 2024-08-01
-
----
-
-### 3. ZENITH AEROSPACE INC
+### 2. ZENITH AEROSPACE INC
 
 **Location:** BELMONT, California
 **Website:** https://www.zenithaero.com
@@ -113,6 +86,34 @@ Engage at the SBIR Phase II inflection point, where technology is government-val
 **Recent Activity:**
 - Latest SBIR: 2024-08-26
 - Latest Reg D filing: 2024-04-04
+
+---
+
+### 3. AscendArc, Inc.
+
+**Location:** PORTLAND, Oregon
+**Website:** www.ascendarc.com
+**Estimated Stage:** Seed / Early  
+**Composite Score:** 4.50 (+4.5 / 0.0)  
+**Technology Relevance:** 0.326
+
+**Technology Focus:**
+- Rapid, Scaleable Geosynchronous Communications
+- Rapid, Scaleable Geosynchronous Bandwidth
+
+**Intelligence Signals:**
+- [+] SBIR + VC Raise (score: 1.40)
+- [+] SBIR Phase II (score: 1.35)
+- [+] Fast SBIR Graduation (score: 1.05)
+- [+] High-Priority Tech (score: 0.70)
+
+**Financial Summary:**
+- 2 SBIR awards ($1.9M)
+- Private capital: $2.0M
+
+**Recent Activity:**
+- Latest SBIR: 2024-08-22
+- Latest Reg D filing: 2023-11-17
 
 ---
 
@@ -170,6 +171,7 @@ Engage at the SBIR Phase II inflection point, where technology is government-val
 ### 6. TERASPATIAL INC
 
 **Location:** PALO ALTO, California
+**Website:** https://teraspatial.ai/
 **Estimated Stage:** Series A  
 **Composite Score:** 2.90 (+2.9 / 0.0)  
 **Technology Relevance:** 0.395
@@ -191,58 +193,35 @@ Engage at the SBIR Phase II inflection point, where technology is government-val
 
 ---
 
-### 7. THRUST AI LLC
-
-**Location:** ENID, Oklahoma
-**Website:** https://www.thrustai.com
-**Estimated Stage:** Seed / Early  
-**Composite Score:** 3.17 (+3.2 / 0.0)  
-**Technology Relevance:** 0.370
-
-**Technology Focus:**
-- Combat Controller (SOF) Parasitic Radar & Optical Fusion for Contested Airspace C2
-- Passive RADAR integration with AI-enabled Terminal Airspace Awareness Suite ("Bird Brain") for Forward-deployed and Contested SOF Airfield Operations
-- Combat Controller (SOF) AI Sensor Fusion for Contested Airspace C2
-
-**Intelligence Signals:**
-- [+] SBIR Phase II (score: 1.35)
-- [+] Fast SBIR Graduation (score: 1.12)
-- [+] High-Priority Tech (score: 0.70)
-
-**Financial Summary:**
-- 4 SBIR awards ($2.6M)
-
-**Recent Activity:**
-- Latest SBIR: 2024-08-28
-
----
-
-### 8. NEXTGEN AERONAUTICS, INC.
+### 7. K2 SPACE CORPORATION
 
 **Location:** TORRANCE, California
-**Website:** www.nextgenaero.com
-**Estimated Stage:** Seed / Early  
-**Composite Score:** 2.05 (+2.0 / 0.0)  
-**Technology Relevance:** 0.442
+**Website:** https://www.k2space.com/
+**Estimated Stage:** Series A  
+**Composite Score:** 3.25 (+3.2 / 0.0)  
+**Technology Relevance:** 0.311
 
 **Technology Focus:**
-- Wireless Airborne Instrumentation Network (WAIN)
-- Manufacturing High Fidelity Full-scale WTM for Next-generation Air Vehicle Development
-- Manufacturable Performance-Tailored Mesostructures for Hypersonics
+- Multi-Function Software Defined Phased Array Satellite Payload
+- High Performance TacRS Constellation Satellite Platform
+- High Powered Electric Propulsion System for Space Vehicles
 
 **Intelligence Signals:**
-- [+] SBIR Phase II (score: 1.35)
+- [+] SBIR + VC Raise (score: 1.50)
+- [+] Funding Velocity (score: 1.05)
 - [+] High-Priority Tech (score: 0.70)
 
 **Financial Summary:**
-- 3 SBIR awards ($3.8M)
+- 3 SBIR awards ($6.7M)
+- Private capital: $8.9M
 
 **Recent Activity:**
-- Latest SBIR: 2024-09-23
+- Latest SBIR: 2024-09-18
+- Latest Reg D filing: 2023-02-28
 
 ---
 
-### 9. FOURTH STATE COMMUNICATIONS, LLC
+### 8. FOURTH STATE COMMUNICATIONS, LLC
 
 **Location:** CHEYENNE, Wyoming
 **Estimated Stage:** Seed / Early  
@@ -266,7 +245,7 @@ Engage at the SBIR Phase II inflection point, where technology is government-val
 
 ---
 
-### 10. SOLSTAR SPACE COMPANY
+### 9. SOLSTAR SPACE COMPANY
 
 **Location:** SANTA FE, New Mexico
 **Website:** www.solstarspace.com
@@ -287,6 +266,31 @@ Engage at the SBIR Phase II inflection point, where technology is government-val
 
 **Recent Activity:**
 - Latest SBIR: 2024-05-14
+
+---
+
+### 10. XL SCIENTIFIC LLC
+
+**Location:** ALBUQUERQUE, New Mexico
+**Website:** https://verusresearch.net
+**Estimated Stage:** Seed / Early  
+**Composite Score:** 2.25 (+2.2 / 0.0)  
+**Technology Relevance:** 0.374
+
+**Technology Focus:**
+- Predictive M&S Framework for HEL Engagements of RF Seeker Threat Systems
+- High Frequency, High Gain, High Power Microwave Antennas, Phase II
+- Microwave Source with Frequency Tuning (MISFT)
+
+**Intelligence Signals:**
+- [+] SBIR Phase II (score: 1.35)
+- [+] High-Priority Tech (score: 0.90)
+
+**Financial Summary:**
+- 5 SBIR awards ($4.9M)
+
+**Recent Activity:**
+- Latest SBIR: 2024-08-26
 
 ---
 

@@ -304,13 +304,16 @@ def build_pdf(prospects, title, queries, output_path, analyst_note=None):
 
     # ── Analyst's Note ────────────────────────────────────────────────────
     if analyst_note:
-        pdf.check_page_break(50)
+        # Estimate height: title + paragraphs at ~4.5mm/line, ~90 chars/line
+        est_lines = sum(len(p) // 90 + 1 for p in analyst_note)
+        est_h = 12 + est_lines * 4.5 + len(analyst_note) * 2
+        pdf.check_page_break(est_h)
         pdf.ln(2)
         pdf.subsection_title("Analyst's Note")
-        pdf.ln(1)
+        pdf.ln(0.5)
         for para in analyst_note:
             pdf.body_text(para)
-            pdf.ln(1)
+            pdf.ln(0.5)
 
     # ── PAGE 3+: Ranked Summary Table ───────────────────────────────────────
     pdf.add_page()

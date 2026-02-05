@@ -355,7 +355,7 @@ def generate_analyst_note(prospects, queries, title):
     if other_stages:
         others = ", ".join(f"{c} at {s}" for s, c in sorted(other_stages, key=lambda x: -x[1]))
         p1 += f" ({others})"
-    p1 += " — a fragmented, early-stage vertical with consolidation opportunity."
+    p1 += " - a fragmented, early-stage vertical with consolidation opportunity."
 
     # ── Paragraph 2: Opportunity Insight ──
     p2_parts = []
@@ -368,13 +368,13 @@ def generate_analyst_note(prospects, queries, title):
     if len(phase2_companies) > 0 and len(contract_companies) == 0:
         p2_parts.append(
             f"{len(phase2_companies)} companies hold Phase II awards but none have "
-            "converted to production contracts — a transition gap that represents "
+            "converted to production contracts - a transition gap that represents "
             "both risk and opportunity for partners who can accelerate commercialization."
         )
     elif len(phase2_companies) > len(contract_companies) > 0:
         p2_parts.append(
             f"A transition gap is visible: {len(phase2_companies)} hold Phase II awards "
-            f"while only {len(contract_companies)} have won production contracts, "
+            f"while only {len(contract_companies)} {'has' if len(contract_companies) == 1 else 'have'} won production contracts, "
             "suggesting the prototype-to-procurement valley of death remains a bottleneck."
         )
 
@@ -393,7 +393,7 @@ def generate_analyst_note(prospects, queries, title):
 
     # ── Paragraph 3: Takeaway ──
     p3 = ("Engage at the SBIR Phase II inflection point, where technology is "
-          "government-validated but commercialization support is scarce — these "
+          "government-validated but commercialization support is scarce - these "
           "companies are most responsive to strategic partnerships and most likely "
           "to convert to program-of-record suppliers.")
 
