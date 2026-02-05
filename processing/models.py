@@ -84,6 +84,7 @@ class Entity(Base):
 
     # Metadata
     headquarters_location: Mapped[Optional[str]] = mapped_column(Text)
+    website_url: Mapped[Optional[str]] = mapped_column(Text)
     founded_date: Mapped[Optional[date]] = mapped_column(Date)
     technology_tags: Mapped[Optional[dict]] = mapped_column(JSON, default=list)
 

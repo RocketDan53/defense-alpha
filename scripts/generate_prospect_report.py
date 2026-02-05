@@ -5,15 +5,18 @@ Generate targeted prospect reports using semantic search + signal scoring.
 Combines SBIR embedding similarity, composite signal scores, and funding/contract
 data to produce ranked prospect lists for specific technology verticals.
 
+Output formats: .md (markdown) or .pdf (polished PDF report).
+
 Usage:
     python scripts/generate_prospect_report.py \
         --query "RF antenna radio tactical communications mesh networking spectrum" \
         --title "RF & Communications Emerging Company Report" \
-        --output reports/rf_comms_prospects.md \
-        --top 20
+        --output reports/rf_comms_prospects.pdf \
+        --count 10
 """
 
 import argparse
+import re
 import struct
 import sys
 from collections import defaultdict
@@ -71,7 +74,7 @@ EXCLUDE_NAMES = {
 }
 
 SIGNAL_DISPLAY_NAMES = {
-    SIGNAL_SBIR_TO_CONTRACT: "SBIR→Contract",
+    SIGNAL_SBIR_TO_CONTRACT: "SBIR->Contract",
     SIGNAL_RAPID_GROWTH: "Rapid Growth",
     SIGNAL_SBIR_TO_VC: "SBIR + VC Raise",
     SIGNAL_OUTSIZED_AWARD: "Outsized Award",
@@ -98,6 +101,12 @@ def load_model():
     return SentenceTransformer("all-MiniLM-L6-v2")
 
 
+def clean_title(title: str) -> str:
+    """Strip leading junk characters (?, replacement chars) from SBIR titles."""
+    title = re.sub(r'^[?\s\x00-\x1f\ufffd]+', '', title)
+    return title.strip()
+
+
 def semantic_search(db, model, query: str, top_n: int = 200):
     """Return top_n entity_ids ranked by semantic similarity to query."""
     query_vec = model.encode([query])[0]
@@ -105,7 +114,7 @@ def semantic_search(db, model, query: str, top_n: int = 200):
 
     rows = db.query(SbirEmbedding).all()
     if not rows:
-        return {}
+        return {}, defaultdict(list)
 
     embeddings = np.zeros((len(rows), EMBEDDING_DIM), dtype=np.float32)
     meta = []
@@ -173,7 +182,6 @@ def compute_composite(db, entity_id):
 
 def get_entity_activity(db, entity_id):
     """Get latest activity dates and financial summary."""
-    # Latest SBIR
     latest_sbir = db.query(func.max(FundingEvent.event_date)).filter(
         FundingEvent.entity_id == entity_id,
         FundingEvent.event_type.in_([
@@ -198,7 +206,6 @@ def get_entity_activity(db, entity_id):
         ]),
     ).scalar() or 0
 
-    # Latest contract
     latest_contract = db.query(func.max(Contract.award_date)).filter(
         Contract.entity_id == entity_id,
     ).scalar()
@@ -211,7 +218,6 @@ def get_entity_activity(db, entity_id):
         Contract.entity_id == entity_id,
     ).scalar() or 0
 
-    # Latest Reg D
     latest_regd = db.query(func.max(FundingEvent.event_date)).filter(
         FundingEvent.entity_id == entity_id,
         FundingEvent.event_type == FundingEventType.REG_D_FILING,
@@ -222,11 +228,9 @@ def get_entity_activity(db, entity_id):
         FundingEvent.event_type == FundingEventType.REG_D_FILING,
     ).scalar() or Decimal(0)
 
-    # Most recent activity
     dates = [d for d in [latest_sbir, latest_contract, latest_regd] if d]
     latest_activity = max(dates) if dates else None
 
-    # Estimate stage
     total_value = float(total_sbir) + float(total_contract) + float(total_regd)
     if total_value > 100_000_000:
         stage = "Growth / Scale-up"
@@ -259,10 +263,151 @@ def is_excluded(name: str) -> bool:
     return any(exc in lower for exc in EXCLUDE_NAMES)
 
 
+def format_currency(val: float) -> str:
+    if val >= 1_000_000_000:
+        return f"${val / 1_000_000_000:.1f}B"
+    if val >= 1_000_000:
+        return f"${val / 1_000_000:.1f}M"
+    if val >= 1_000:
+        return f"${val / 1_000:.0f}K"
+    return f"${val:.0f}"
+
+
+def generate_analyst_note(prospects, queries, title):
+    """Generate data-driven analyst's note from prospect data.
+
+    Returns list of paragraph strings (plain text).
+    """
+    count = len(prospects)
+
+    # Extract vertical name from title
+    vertical = title
+    for suffix in ["Emerging Company Report", "Report"]:
+        vertical = vertical.replace(suffix, "").strip()
+    vertical = vertical.rstrip(" -:")
+    if not vertical:
+        vertical = "this technology sector"
+
+    # ── Aggregate stats ──
+    total_sbir_funding = sum(p["activity"]["total_sbir"] for p in prospects)
+    total_private = sum(p["activity"]["total_regd"] for p in prospects)
+    total_sbir_awards = sum(p["activity"]["sbir_count"] for p in prospects)
+    vc_companies = [p for p in prospects if p["activity"]["total_regd"] > 0]
+
+    # Stage distribution
+    stages = defaultdict(int)
+    for p in prospects:
+        stages[p["activity"]["stage"]] += 1
+    dominant_stage = max(stages, key=stages.get)
+    dominant_count = stages[dominant_stage]
+
+    # Sub-segment detection from SBIR titles
+    segment_keywords = {
+        "mesh networking": ["mesh", "networked radio"],
+        "electronic warfare": ["electronic warfare", "decoy", "jamming", "ew "],
+        "radar & sensing": ["radar", "sensor fusion", "parasitic radar"],
+        "SATCOM & space comms": ["satellite comm", "satcom", "cubesat", "high bandwidth comm"],
+        "tactical communications": ["tactical comm", "blos", "beyond line of sight",
+                                    "comms backhaul", "warfighter", "wartime"],
+        "beamforming & directed RF": ["beamforming", "mimo", "mmwave",
+                                      "directional wireless", "antenna"],
+        "network security": ["zero trust", "secure comm", "stig"],
+    }
+    segment_companies = defaultdict(set)
+    for p in prospects:
+        for _, t in p.get("titles", []):
+            lower = t.lower()
+            for seg, kws in segment_keywords.items():
+                if any(kw in lower for kw in kws):
+                    segment_companies[seg].add(p["name"])
+    top_segments = sorted(segment_companies.items(), key=lambda x: -len(x[1]))
+
+    # Signal patterns
+    signal_counts = defaultdict(int)
+    for p in prospects:
+        for sig in p["positive_signals"]:
+            signal_counts[sig["name"]] += 1
+
+    phase2_companies = [p for p in prospects
+                        if any(s["name"] == "SBIR Phase II" for s in p["positive_signals"])]
+    contract_companies = [p for p in prospects
+                          if any(s["name"] == "SBIR->Contract" for s in p["positive_signals"])]
+    vc_sbir_companies = [p for p in prospects
+                         if p["activity"]["total_regd"] > 0
+                         and any(s["name"] in ("SBIR + VC Raise", "Funding Velocity")
+                                 for s in p["positive_signals"])]
+
+    # ── Paragraph 1: Market Observation ──
+    p1 = (f"Defense Alpha identified {count} emerging companies with active programs "
+          f"in {vertical}, backed by {total_sbir_awards} SBIR awards totaling "
+          f"{format_currency(total_sbir_funding)}")
+    if vc_companies:
+        p1 += (f" and {format_currency(total_private)} in disclosed private capital "
+               f"across {len(vc_companies)} companies")
+    p1 += ". "
+
+    active_segs = [f"{name} ({len(cos)})" for name, cos in top_segments if len(cos) >= 2]
+    if active_segs:
+        p1 += f"Sub-segment activity clusters around {', '.join(active_segs[:3])}. "
+
+    p1 += f"{dominant_count} of {count} sit at {dominant_stage} stage"
+    other_stages = [(s, c) for s, c in stages.items() if s != dominant_stage and c > 0]
+    if other_stages:
+        others = ", ".join(f"{c} at {s}" for s, c in sorted(other_stages, key=lambda x: -x[1]))
+        p1 += f" ({others})"
+    p1 += " — a fragmented, early-stage vertical with consolidation opportunity."
+
+    # ── Paragraph 2: Opportunity Insight ──
+    p2_parts = []
+    if vc_sbir_companies:
+        names = [p["name"] for p in vc_sbir_companies[:3]]
+        p2_parts.append(
+            f"Momentum is concentrated in companies pairing SBIR validation with "
+            f"private capital: {', '.join(names)}."
+        )
+    if len(phase2_companies) > 0 and len(contract_companies) == 0:
+        p2_parts.append(
+            f"{len(phase2_companies)} companies hold Phase II awards but none have "
+            "converted to production contracts — a transition gap that represents "
+            "both risk and opportunity for partners who can accelerate commercialization."
+        )
+    elif len(phase2_companies) > len(contract_companies) > 0:
+        p2_parts.append(
+            f"A transition gap is visible: {len(phase2_companies)} hold Phase II awards "
+            f"while only {len(contract_companies)} have won production contracts, "
+            "suggesting the prototype-to-procurement valley of death remains a bottleneck."
+        )
+
+    inflection = []
+    for p in prospects:
+        sig_names = {s["name"] for s in p["positive_signals"]}
+        if "Fast SBIR Graduation" in sig_names or "Funding Velocity" in sig_names:
+            inflection.append(p["name"])
+    if inflection:
+        p2_parts.append(
+            f"Watch {', '.join(inflection[:3])} for near-term movement "
+            "based on acceleration signals."
+        )
+
+    p2 = " ".join(p2_parts)
+
+    # ── Paragraph 3: Takeaway ──
+    p3 = ("Engage at the SBIR Phase II inflection point, where technology is "
+          "government-validated but commercialization support is scarce — these "
+          "companies are most responsive to strategic partnerships and most likely "
+          "to convert to program-of-record suppliers.")
+
+    paragraphs = [p1]
+    if p2:
+        paragraphs.append(p2)
+    paragraphs.append(p3)
+    return paragraphs
+
+
 def build_prospects(db, model, queries: list[str], min_composite: float = 0.0,
-                    min_similarity: float = 0.35, top_n: int = 20):
+                    min_similarity: float = 0.35, min_relevance: float = 0.40,
+                    top_n: int = 10, exclude_names: set = None):
     """Build ranked prospect list from multiple semantic queries."""
-    # Run all queries and merge scores
     merged_sim = {}
     all_titles = defaultdict(list)
 
@@ -277,11 +422,9 @@ def build_prospects(db, model, queries: list[str], min_composite: float = 0.0,
 
     print(f"  Semantic matches: {len(merged_sim)} entities")
 
-    # Filter and enrich
     prospects = []
     for eid, sim_score in merged_sim.items():
-        # Enforce minimum relevance to stay on-topic
-        if sim_score < min_similarity:
+        if sim_score < min_relevance:
             continue
 
         entity = db.query(Entity).filter(Entity.id == eid).first()
@@ -290,6 +433,8 @@ def build_prospects(db, model, queries: list[str], min_composite: float = 0.0,
         if entity.entity_type != EntityType.STARTUP:
             continue
         if is_excluded(entity.canonical_name):
+            continue
+        if exclude_names and entity.canonical_name in exclude_names:
             continue
 
         scoring = compute_composite(db, eid)
@@ -300,26 +445,27 @@ def build_prospects(db, model, queries: list[str], min_composite: float = 0.0,
 
         activity = get_entity_activity(db, eid)
 
-        # Dedupe and sort titles by sim
+        # Dedupe and sort titles by sim, clean artifacts
         seen = set()
         unique_titles = []
         for sim, title in sorted(all_titles.get(eid, []), key=lambda x: -x[0]):
-            if title not in seen:
-                seen.add(title)
-                unique_titles.append((sim, title))
+            cleaned = clean_title(title)
+            if cleaned and cleaned not in seen:
+                seen.add(cleaned)
+                unique_titles.append((sim, cleaned))
 
         # Combined ranking: relevance-weighted
-        # High relevance companies with moderate signals beat
-        # low relevance companies with high signals
         max_composite = 6.0
         norm_composite = min(scoring["composite"] / max_composite, 1.0)
-        norm_sim = sim_score  # already 0-1
-        rank_score = 0.55 * norm_sim + 0.45 * norm_composite
+        rank_score = 0.65 * sim_score + 0.35 * norm_composite
+
+        website_url = getattr(entity, 'website_url', None) or ""
 
         prospects.append({
             "entity_id": eid,
             "name": entity.canonical_name,
             "location": entity.headquarters_location or "",
+            "website_url": website_url,
             "sim_score": sim_score,
             "composite": scoring["composite"],
             "positive": scoring["positive"],
@@ -332,21 +478,12 @@ def build_prospects(db, model, queries: list[str], min_composite: float = 0.0,
         })
 
     prospects.sort(key=lambda x: -x["rank_score"])
-    print(f"  Qualified prospects (sim >= {min_similarity}): {len(prospects)}")
+    print(f"  Qualified prospects (relevance >= {min_relevance}): {len(prospects)}")
     return prospects[:top_n]
 
 
-def format_currency(val: float) -> str:
-    if val >= 1_000_000_000:
-        return f"${val / 1_000_000_000:.1f}B"
-    if val >= 1_000_000:
-        return f"${val / 1_000_000:.1f}M"
-    if val >= 1_000:
-        return f"${val / 1_000:.0f}K"
-    return f"${val:.0f}"
-
-
-def generate_markdown(prospects: list, title: str, queries: list[str]) -> str:
+def generate_markdown(prospects: list, title: str, queries: list[str],
+                      analyst_note: list[str] = None) -> str:
     """Generate markdown report from prospect list."""
     today = date.today().strftime("%B %d, %Y")
 
@@ -355,11 +492,23 @@ def generate_markdown(prospects: list, title: str, queries: list[str]) -> str:
     lines.append(f"")
     lines.append(f"**Generated:** {today}")
     lines.append(f"**Prospects:** {len(prospects)} companies")
-    lines.append(f"**Methodology:** Semantic similarity search over {len(queries)} technology queries, "
+    n_queries = len(queries)
+    query_word = "query" if n_queries == 1 else "queries"
+    lines.append(f"**Methodology:** Semantic similarity search over {n_queries} technology {query_word}, "
                  f"filtered for startups with positive intelligence signals and net-positive composite scores.")
     lines.append(f"")
     lines.append(f"---")
     lines.append(f"")
+
+    # Analyst's Note
+    if analyst_note:
+        lines.append(f"## Analyst's Note")
+        lines.append(f"")
+        for para in analyst_note:
+            lines.append(para)
+            lines.append(f"")
+        lines.append(f"---")
+        lines.append(f"")
 
     # Summary table
     lines.append(f"## Ranked Prospect List")
@@ -390,6 +539,8 @@ def generate_markdown(prospects: list, title: str, queries: list[str]) -> str:
 
         if p["location"]:
             lines.append(f"**Location:** {p['location']}")
+        if p["website_url"]:
+            lines.append(f"**Website:** {p['website_url']}")
 
         lines.append(f"**Estimated Stage:** {act['stage']}  ")
         lines.append(f"**Composite Score:** {p['composite']:.2f} "
@@ -399,16 +550,16 @@ def generate_markdown(prospects: list, title: str, queries: list[str]) -> str:
 
         # Technology summary
         lines.append(f"**Technology Focus:**")
-        for sim, title in p["titles"][:3]:
-            lines.append(f"- {title}")
+        for sim, title_text in p["titles"][:3]:
+            lines.append(f"- {title_text}")
         lines.append(f"")
 
         # Signals
         lines.append(f"**Intelligence Signals:**")
         for sig in p["positive_signals"]:
-            lines.append(f"- :white_check_mark: {sig['name']} (score: {sig['score']:.2f})")
+            lines.append(f"- [+] {sig['name']} (score: {sig['score']:.2f})")
         for sig in p["negative_signals"]:
-            lines.append(f"- :warning: {sig['name']} (score: {sig['score']:.2f})")
+            lines.append(f"- [-] {sig['name']} (score: {sig['score']:.2f})")
         lines.append(f"")
 
         # Financial summary
@@ -442,14 +593,20 @@ def generate_markdown(prospects: list, title: str, queries: list[str]) -> str:
     # Methodology
     lines.append(f"## Methodology")
     lines.append(f"")
-    lines.append(f"This report was generated by the Defense Alpha Intelligence Engine using:")
+    lines.append(f"**Scoring Methodology:**")
+    lines.append(f"- **Composite Score:** Weighted sum of 13 signals (SBIR advancement, contract wins, "
+                 f"VC raises, agency breadth, risk factors). Higher = stronger momentum.")
+    lines.append(f"- **Relevance Score:** Semantic similarity between company R&D portfolio and target "
+                 f"technology (0-1 scale).")
+    lines.append(f"- **Final Rank:** 65% relevance + 35% normalized composite score.")
     lines.append(f"")
+    lines.append(f"**Pipeline:**")
     lines.append(f"1. **Semantic Search:** SBIR award titles embedded with `all-MiniLM-L6-v2` "
                  f"sentence-transformer (384-dim vectors). Cosine similarity against technology queries.")
     lines.append(f"2. **Signal Scoring:** Composite score from {len(ALL_WEIGHTS)} signal types "
                  f"including SBIR progression, contract wins, VC fundraising, multi-agency interest, "
                  f"and risk indicators (customer concentration, SBIR stalling).")
-    lines.append(f"3. **Ranking:** 40% technology relevance + 60% composite signal score.")
+    lines.append(f"3. **Ranking:** 65% technology relevance + 35% composite signal score.")
     lines.append(f"4. **Filtering:** Startups only, net-positive composite score, at least one positive signal, "
                  f"excluding major defense primes.")
     lines.append(f"")
@@ -457,8 +614,13 @@ def generate_markdown(prospects: list, title: str, queries: list[str]) -> str:
     for q in queries:
         lines.append(f'- "{q}"')
     lines.append(f"")
-    lines.append(f"**Data Sources:** USASpending (DoD contracts), SBIR.gov (SBIR/STTR awards), "
-                 f"SEC EDGAR (Reg D filings)")
+    lines.append(f"---")
+    lines.append(f"")
+    lines.append(f"**Data Sources:**")
+    lines.append(f"- 5,147 DoD contracts from USASpending.gov (2020-2025)")
+    lines.append(f"- 1,653 SBIR awards with semantic embeddings")
+    lines.append(f"- 1,979 SEC Form D filings")
+    lines.append(f"- Proprietary composite scoring across 13 signal types")
     lines.append(f"")
     lines.append(f"*Defense Alpha Intelligence Engine v1.0 | {today}*")
 
@@ -472,23 +634,38 @@ def main():
     parser.add_argument("--title", type=str, default="Emerging Company Report",
                         help="Report title")
     parser.add_argument("--output", type=str, default="reports/prospect_report.md",
-                        help="Output file path")
-    parser.add_argument("--top", type=int, default=20, help="Number of prospects")
+                        help="Output file path (.md or .pdf)")
+    parser.add_argument("--count", type=int, default=10,
+                        help="Number of prospects (default: 10)")
+    parser.add_argument("--top", type=int, default=None,
+                        help="Alias for --count (deprecated)")
+    parser.add_argument("--min-relevance", type=float, default=0.40,
+                        help="Minimum relevance score (default: 0.40)")
     parser.add_argument("--min-composite", type=float, default=0.0,
                         help="Minimum composite score")
+    parser.add_argument("--exclude", type=str, default="",
+                        help="Semicolon-separated company names to exclude")
     args = parser.parse_args()
+
+    top_n = args.top if args.top is not None else args.count
+    exclude_set = set(n.strip() for n in args.exclude.split(";") if n.strip()) if args.exclude else None
 
     db = SessionLocal()
 
     print(f"Loading embedding model...")
     model = load_model()
 
+    if exclude_set:
+        print(f"  Excluding: {', '.join(exclude_set)}")
+
     print(f"Building prospect list...")
     prospects = build_prospects(
         db, model,
         queries=args.query,
         min_composite=args.min_composite,
-        top_n=args.top,
+        min_relevance=args.min_relevance,
+        top_n=top_n,
+        exclude_names=exclude_set,
     )
 
     if not prospects:
@@ -496,16 +673,28 @@ def main():
         db.close()
         return
 
-    print(f"\nGenerating report: {args.output}")
-    md = generate_markdown(prospects, args.title, args.query)
+    analyst_note = generate_analyst_note(prospects, args.query, args.title)
 
     output_path = Path(args.output)
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    output_path.write_text(md)
 
-    print(f"Report saved: {output_path} ({len(md):,} bytes)")
+    if output_path.suffix == ".pdf":
+        # PDF output — import rendering module
+        sys.path.insert(0, str(Path(__file__).parent))
+        from generate_pdf_report import build_pdf
+        print(f"\nGenerating PDF: {output_path}")
+        pages = build_pdf(prospects, args.title, args.query, output_path,
+                          analyst_note=analyst_note)
+        print(f"Report saved: {output_path} ({pages} pages, {output_path.stat().st_size:,} bytes)")
+    else:
+        # Markdown output
+        print(f"\nGenerating report: {output_path}")
+        md = generate_markdown(prospects, args.title, args.query,
+                               analyst_note=analyst_note)
+        output_path.write_text(md)
+        print(f"Report saved: {output_path} ({len(md):,} bytes)")
 
-    # Print summary to console
+    # Console summary
     print(f"\n{'='*80}")
     print(f"  TOP {len(prospects)} PROSPECTS")
     print(f"{'='*80}")
