@@ -17,6 +17,7 @@ from sqlalchemy import (
     Enum,
     ForeignKey,
     Index,
+    LargeBinary,
     Numeric,
     String,
     Text,
@@ -299,3 +300,35 @@ class EntityMerge(Base):
 
     def __repr__(self) -> str:
         return f"<EntityMerge(source={self.source_name} -> target={self.target_name}, reason={self.merge_reason.value})>"
+
+
+class SbirEmbedding(Base):
+    """
+    Sentence-transformer embeddings for SBIR award titles/abstracts.
+    Enables semantic similarity search across defense technology projects.
+    """
+
+    __tablename__ = "sbir_embeddings"
+
+    id: Mapped[str] = mapped_column(
+        String(36), primary_key=True, default=generate_uuid
+    )
+    funding_event_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("funding_events.id"), nullable=False, unique=True, index=True
+    )
+    entity_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("entities.id"), nullable=False, index=True
+    )
+    award_title: Mapped[str] = mapped_column(Text, nullable=False)
+    embedding: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, default=func.now(), nullable=False
+    )
+
+    # Relationships
+    funding_event: Mapped["FundingEvent"] = relationship("FundingEvent")
+    entity: Mapped["Entity"] = relationship("Entity")
+
+    def __repr__(self) -> str:
+        return f"<SbirEmbedding(id={self.id}, title={self.award_title[:50]})>"
