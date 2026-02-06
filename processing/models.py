@@ -39,6 +39,18 @@ class EntityType(PyEnum):
     AGENCY = "agency"
 
 
+class CoreBusiness(PyEnum):
+    """What the company primarily builds or sells."""
+    RF_HARDWARE = "rf_hardware"              # Builds radios, antennas, radar, EW systems
+    SOFTWARE = "software"                     # Builds software products
+    SYSTEMS_INTEGRATOR = "systems_integrator" # Integrates others' tech into solutions
+    AEROSPACE_PLATFORMS = "aerospace_platforms"  # Builds aircraft, spacecraft, drones, satellites
+    COMPONENTS = "components"                 # Builds parts/subsystems, not full systems
+    SERVICES = "services"                     # Consulting, support, training, R&D services
+    OTHER = "other"                           # Doesn't fit above categories
+    UNCLASSIFIED = "unclassified"            # Not yet classified
+
+
 class FundingEventType(PyEnum):
     VC_ROUND = "vc_round"
     SBIR_PHASE_1 = "sbir_phase_1"
@@ -87,6 +99,13 @@ class Entity(Base):
     website_url: Mapped[Optional[str]] = mapped_column(Text)
     founded_date: Mapped[Optional[date]] = mapped_column(Date)
     technology_tags: Mapped[Optional[dict]] = mapped_column(JSON, default=list)
+
+    # Business classification (what they build/sell)
+    core_business: Mapped[Optional[CoreBusiness]] = mapped_column(
+        Enum(CoreBusiness), nullable=True, index=True
+    )
+    core_business_confidence: Mapped[Optional[Decimal]] = mapped_column(Numeric(3, 2))
+    core_business_reasoning: Mapped[Optional[str]] = mapped_column(Text)
 
     # Soft delete for merged entities
     merged_into_id: Mapped[Optional[str]] = mapped_column(

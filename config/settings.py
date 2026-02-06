@@ -40,6 +40,9 @@ class Settings(BaseSettings):
     CRUNCHBASE_API_KEY: str = Field(default="")
     SAM_GOV_API_KEY: str = Field(default="")
 
+    # LLM API
+    ANTHROPIC_API_KEY: str = Field(default="")
+
     # Entity resolution settings
     FUZZY_MATCH_THRESHOLD: int = Field(default=85)
 
