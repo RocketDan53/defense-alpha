@@ -68,6 +68,18 @@ class SignalStatus(PyEnum):
     FALSE_POSITIVE = "false_positive"
 
 
+class OutcomeType(PyEnum):
+    """Types of outcomes we track for signal validation."""
+    NEW_CONTRACT = "new_contract"           # Won DoD/federal contract
+    FUNDING_RAISE = "funding_raise"         # New Reg D filing or VC round
+    SBIR_ADVANCE = "sbir_advance"           # Phase progression (I->II, II->III)
+    ACQUISITION = "acquisition"             # Acquired by another entity
+    NEW_AGENCY = "new_agency"               # Contract with new DoD branch
+    RECOMPETE_LOSS = "recompete_loss"       # Lost contract recompete
+    COMPANY_INACTIVE = "company_inactive"   # No activity 12+ months
+    SBIR_STALL = "sbir_stall"               # Phase I but no advancement
+
+
 def generate_uuid() -> str:
     return str(uuid.uuid4())
 
@@ -131,6 +143,9 @@ class Entity(Base):
         back_populates="entity", cascade="all, delete-orphan"
     )
     signals: Mapped[list["Signal"]] = relationship(
+        back_populates="entity", cascade="all, delete-orphan"
+    )
+    outcomes: Mapped[list["OutcomeEvent"]] = relationship(
         back_populates="entity", cascade="all, delete-orphan"
     )
     merged_into: Mapped[Optional["Entity"]] = relationship(
@@ -279,6 +294,57 @@ class Signal(Base):
 
     def __repr__(self) -> str:
         return f"<Signal(id={self.id}, type={self.signal_type}, confidence={self.confidence_score})>"
+
+
+class OutcomeEvent(Base):
+    """
+    Tracked outcomes for signal validation.
+
+    Records what actually happened to entities after signals were detected,
+    enabling measurement of signal predictive accuracy.
+    """
+
+    __tablename__ = "outcome_events"
+
+    id: Mapped[str] = mapped_column(
+        String(36), primary_key=True, default=generate_uuid
+    )
+    entity_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("entities.id"), nullable=False, index=True
+    )
+
+    # What happened
+    outcome_type: Mapped[OutcomeType] = mapped_column(
+        Enum(OutcomeType), nullable=False, index=True
+    )
+    outcome_date: Mapped[date] = mapped_column(Date, nullable=False, index=True)
+    outcome_value: Mapped[Optional[Decimal]] = mapped_column(Numeric(18, 2))
+    details: Mapped[Optional[dict]] = mapped_column(JSON)
+    source: Mapped[str] = mapped_column(Text, nullable=False)
+
+    # Link back to what predicted it
+    related_signal_ids: Mapped[Optional[dict]] = mapped_column(JSON, default=list)
+
+    # For measuring prediction accuracy
+    months_since_signal: Mapped[Optional[int]] = mapped_column(Numeric(4, 0))
+
+    # Deduplication key (source:unique_id)
+    source_key: Mapped[Optional[str]] = mapped_column(Text, unique=True, index=True)
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, default=func.now(), nullable=False
+    )
+
+    # Relationships
+    entity: Mapped["Entity"] = relationship(back_populates="outcomes")
+
+    __table_args__ = (
+        Index("ix_outcomes_entity_type", "entity_id", "outcome_type"),
+        Index("ix_outcomes_date_type", "outcome_date", "outcome_type"),
+    )
+
+    def __repr__(self) -> str:
+        return f"<OutcomeEvent(id={self.id}, type={self.outcome_type.value}, value={self.outcome_value})>"
 
 
 class MergeReason(PyEnum):
