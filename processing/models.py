@@ -35,6 +35,7 @@ class Base(DeclarativeBase):
 class EntityType(PyEnum):
     STARTUP = "startup"
     PRIME = "prime"
+    RESEARCH = "research"  # Universities, FFRDCs, APLs, think tanks
     INVESTOR = "investor"
     AGENCY = "agency"
 
