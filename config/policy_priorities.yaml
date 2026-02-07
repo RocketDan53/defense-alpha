@@ -1,0 +1,182 @@
+# =============================================================================
+# POLICY PRIORITIES CONFIGURATION
+# =============================================================================
+# Weights calibrated from actual DoD budget growth rates.
+# Used by processing/policy_alignment.py to calculate policy_tailwind scores.
+#
+# Data Source: FY2026 President's Budget Request (June 2025)
+# Last Calibrated: February 2026
+# Next Update Due: FY2027 PBR (expected February 2027)
+#
+# Sources:
+#   - DoD Comptroller: comptroller.defense.gov/Budget-Materials/Budget2026/
+#   - CRS Reports: congress.gov/crs-product/IN12616, R45811
+#   - Arms Control Center FY26 Briefing Book
+#   - SpacePolicyOnline, DefenseScoop budget analysis
+# =============================================================================
+
+# Budget growth weights (FY25 enacted → FY26 request)
+# Values represent multiplier: 1.22 = +22% YoY growth
+# Higher weight = stronger "policy tailwind" for companies aligned to that area
+
+priorities:
+
+  space_resilience:
+    weight: 1.38
+    growth_actual: "+38%"
+    description: >
+      Space domain awareness, satellite protection, responsive launch,
+      proliferated LEO constellations, SATCOM, GPS alternatives,
+      on-orbit servicing, counter-space capabilities.
+    notes: "Driven by Golden Dome missile defense initiative. Space Force fastest-growing service."
+    fy26_budget: "$39.9B (with reconciliation)"
+
+  nuclear_modernization:
+    weight: 1.26
+    growth_actual: "+26%"
+    description: >
+      Technologies supporting Sentinel ICBM, Columbia-class SSBN, B-21 bomber,
+      nuclear C3, warhead modernization, strategic deterrence.
+    notes: "Sentinel +105%, B-21 +94%, Columbia +14%. Total nuclear enterprise $87B."
+    fy26_budget: "$87B total nuclear enterprise"
+
+  autonomous_systems:
+    weight: 1.22
+    growth_actual: "+22%"
+    description: >
+      Unmanned air/ground/maritime vehicles, AI-enabled autonomy,
+      human-machine teaming, swarming, loyal wingman, autonomous logistics,
+      Replicator-relevant technologies.
+    notes: "First year DoD broke out autonomy as dedicated budget line. Navy +$2.2B alone."
+    fy26_budget: "$13.4B"
+
+  supply_chain_resilience:
+    weight: 1.15
+    growth_actual: "estimate"
+    description: >
+      Domestic semiconductor manufacturing, rare earth alternatives,
+      additive manufacturing, defense industrial base strengthening,
+      trusted microelectronics, reshoring critical components.
+    notes: "CHIPS Act $2B DoD allocation ongoing. Hard to isolate YoY in single budget line."
+    fy26_budget: "$2B CHIPS + fragmented DIB investments"
+
+  contested_logistics:
+    weight: 1.12
+    growth_actual: "estimate"
+    description: >
+      Expeditionary Advanced Base Operations (EABO), distributed maritime ops,
+      agile combat employment, contested resupply, forward arming/refueling,
+      austere basing, Indo-Pacific logistics infrastructure.
+    notes: "Fragmented across Navy/Marines/Air Force. Growing priority but no clean budget line."
+    fy26_budget: "Fragmented - see PDI $10B, MILCON, service O&M"
+
+  electronic_warfare:
+    weight: 1.10
+    growth_actual: "estimate"
+    description: >
+      Radar jamming, communications jamming, spectrum management,
+      EMSO, SIGINT, electronic attack/protection, counter-drone EW.
+    notes: "No consolidated EW budget line. Next-Gen Jammer, EWPMT spread across services."
+    fy26_budget: "Fragmented across services"
+
+  jadc2:
+    weight: 1.10
+    growth_actual: "estimate"
+    description: >
+      Joint All-Domain Command and Control - seamless data sharing,
+      sensor-to-shooter integration, mesh networks, data fusion,
+      AI-enabled battle management, interoperability.
+    notes: "ABMS is only clean budget line (~$300M). True JADC2 spending is $2-3B but distributed."
+    fy26_budget: "~$2-3B estimated (fragmented)"
+
+  border_homeland:
+    weight: 1.05
+    growth_actual: "estimate"
+    description: >
+      Border surveillance and detection, counter-UAS, CBRN detection,
+      critical infrastructure protection, port/maritime security,
+      biometrics, threat interdiction.
+    notes: "DHS reconciliation added $2.7B for surveillance tech. CBP total $23B."
+    fy26_budget: "$23B CBP + $2.7B reconciliation tech"
+
+  cyber_offense_defense:
+    weight: 1.04
+    growth_actual: "+4.1%"
+    description: >
+      Offensive cyber tools, network defense, zero trust architecture,
+      software supply chain security, AI-enabled threat detection,
+      critical infrastructure protection, cryptography.
+    notes: "Steady growth despite rhetoric. CYBERCOM ~$2.6B of $15.1B total cyber."
+    fy26_budget: "$15.1B total cyberspace activities"
+
+  hypersonics:
+    weight: 0.57
+    growth_actual: "-43%"
+    description: >
+      Hypersonic weapons (boost-glide, cruise), hypersonic defense,
+      thermal protection, scramjet propulsion, high-speed materials,
+      tracking/targeting of hypersonic threats.
+    notes: "Declining RDT&E as programs mature and transition to production. HACM $803M."
+    fy26_budget: "$3.9B (down from $6.9B)"
+
+
+# =============================================================================
+# GEOGRAPHIC/STRATEGIC MODIFIERS
+# =============================================================================
+# These are boolean tags applied alongside priority scores.
+# Not weighted - used for filtering and segmentation.
+
+modifiers:
+
+  pacific_relevance:
+    description: >
+      Technology directly applicable to Indo-Pacific operations and
+      China pacing competition. Includes: long-range precision strike,
+      A2/AD counter-capabilities, distributed maritime operations,
+      contested Pacific logistics, Taiwan contingency support.
+    usage: "Tag companies whose SBIR work explicitly addresses Pacific scenarios or China threat."
+    filter_only: true
+    notes: >
+      Replaces standalone 'china_pacing' priority. Pacific relevance is a
+      modifier that can apply to ANY priority area (autonomous systems for
+      Pacific ops, space for Pacific ISR, etc.) rather than a weighted category.
+
+  nato_interoperability:
+    description: >
+      Technologies that enhance interoperability with NATO allies,
+      European defense integration, or Ukraine support.
+    usage: "Tag companies with explicit NATO/allied integration focus."
+    filter_only: true
+
+  arctic_operations:
+    description: >
+      Technologies for Arctic/cold weather operations, great power
+      competition in polar regions.
+    usage: "Tag companies with Arctic-specific capabilities."
+    filter_only: true
+
+
+# =============================================================================
+# SCORING GUIDANCE
+# =============================================================================
+
+scoring:
+  scale: "0.0 to 1.0"
+  thresholds:
+    none: 0.0           # No relevance to this priority
+    tangential: 0.1-0.3 # General-purpose tech that could apply
+    moderate: 0.4-0.6   # Some awards clearly relevant
+    strong: 0.7-0.8     # Multiple awards directly address priority
+    core_focus: 0.9-1.0 # Company's primary work IS this priority
+
+  guidance: |
+    Be conservative - only score high if SBIR titles clearly demonstrate
+    direct relevance. A company building general software tools should
+    score low on most areas. A company building hypersonic thermal
+    protection should score high on hypersonics, low elsewhere.
+
+  policy_tailwind_calculation: |
+    Composite score = sum(priority_score * priority_weight) / sum(weights)
+    Normalized to 0-1 scale. Higher = better alignment with growth areas.
+    A company scoring high on hypersonics (weight 0.57) contributes less
+    to policy_tailwind than one scoring high on space (weight 1.38).

@@ -107,6 +107,9 @@ class Entity(Base):
     core_business_confidence: Mapped[Optional[Decimal]] = mapped_column(Numeric(3, 2))
     core_business_reasoning: Mapped[Optional[str]] = mapped_column(Text)
 
+    # Policy alignment (NDS priority area scores)
+    policy_alignment: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
+
     # Soft delete for merged entities
     merged_into_id: Mapped[Optional[str]] = mapped_column(
         String(36), ForeignKey("entities.id"), nullable=True, index=True
