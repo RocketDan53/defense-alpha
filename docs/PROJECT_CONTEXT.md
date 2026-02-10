@@ -1,6 +1,6 @@
 # Defense Alpha: Project Context
 
-**Last Updated:** February 6, 2026
+**Last Updated:** February 9, 2026
 **Purpose:** Spin up a new Claude instance with full context on the Defense Alpha project
 
 ---
@@ -13,16 +13,17 @@ A Python-based defense intelligence platform that aggregates government and priv
 
 ---
 
-## Current Data State (Feb 6, 2026)
+## Current Data State (Feb 9, 2026)
 
 ### Entity Counts by Type
 | Type | Count | Description |
 |------|-------|-------------|
 | STARTUP | 4,084 | Emerging defense tech companies |
-| PRIME | 405 | Large defense contractors |
-| RESEARCH | 14 | Universities, FFRDCs, APLs |
+| PRIME | 405 | Large defense contractors (reclassified from startup) |
+| RESEARCH | 14 | Universities, FFRDCs, APLs (reclassified from startup) |
 | INVESTOR | 0 | (Not yet populated) |
 | AGENCY | 0 | (Not yet populated) |
+| **Total (unmerged)** | **4,503** | |
 
 ### Entity Counts by Core Business (1,072 classified)
 | Classification | Count | Examples |
@@ -42,8 +43,8 @@ A Python-based defense intelligence platform that aggregates government and priv
 |-------|---------|-------|-------|
 | Contracts | 5,147 | $804.7B | USASpending data |
 | Funding Events | 3,632 | - | SBIR + Reg D combined |
-| Signals (active) | 1,944 | - | 13 signal types |
-| Outcome Events | 23 | - | NEW: Signal validation tracking |
+| Signals | 1,944 | - | 13 signal types |
+| Outcome Events | 23 | - | Signal validation tracking |
 | Policy Alignments | 1,038 | - | Entities scored against NDS priorities |
 
 ---
@@ -68,9 +69,10 @@ python -m processing.business_classifier --entity "PHASE SENSITIVE INNOVATIONS"
 **File:** `processing/policy_alignment.py`
 
 Scores entities against FY2026 National Defense Strategy priorities:
-- 10 priority areas with budget-derived weights
-- Async concurrency support (10 concurrent API calls)
-- Pacific/Indo-Pacific relevance flagging
+- 10 priority areas with budget-derived weights (loaded from `config/policy_priorities.yaml`)
+- Async concurrency support (`--async --concurrency 10`, ~40 entities/min)
+- `--skip-scored` flag to resume interrupted runs
+- Pacific/Indo-Pacific relevance flagging (boolean tag, not weighted)
 - 1,038 entities scored
 
 **Priority Areas (with FY26 budget weights):**
@@ -89,30 +91,33 @@ Scores entities against FY2026 National Defense Strategy priorities:
 
 **Usage:**
 ```bash
-python -m processing.policy_alignment --limit 100 --async --concurrency 10
-python -m processing.policy_alignment --skip-scored  # Resume from where you left off
+python -m processing.policy_alignment --all --async --concurrency 10
+python -m processing.policy_alignment --skip-scored    # Resume from where you left off
+python -m processing.policy_alignment --names "SHIELD AI" "ANDURIL"
+python -m processing.policy_alignment --show-prompt    # Review prompt template
 ```
 
-### 3. Outcome Tracking ✅ NEW (Partial)
+### 3. Outcome Tracking ✅ PARTIAL
 **File:** `scripts/track_outcomes.py`
 **Model:** `OutcomeEvent` in `processing/models.py`
 
 Tracks what happens to entities after signals are detected:
-- Links outcomes back to related signals
-- Calculates `months_since_signal` for prediction accuracy
+- Links outcomes back to related signals via `related_signal_ids`
+- Calculates `months_since_signal` for prediction accuracy measurement
 - Deduplicates via `source_key`
+- Only tracks STARTUP entities (skips primes/research)
 
 **Outcome Types:**
 | Type | Status | Description |
 |------|--------|-------------|
-| new_contract | ✅ Working | Won DoD/federal contract |
+| new_contract | ✅ Working | Won DoD/federal contract (23 tracked) |
 | funding_raise | ⏸️ Stub | New Reg D / VC round |
-| sbir_advance | ⏸️ Stub | Phase progression |
+| sbir_advance | ⏸️ Stub | Phase progression (I→II→III) |
 | acquisition | ⏸️ Stub | Acquired by another entity |
 | new_agency | ⏸️ Stub | Contract with new DoD branch |
 | recompete_loss | ⏸️ Stub | Lost contract renewal |
 | company_inactive | ⏸️ Stub | No activity 12+ months |
-| sbir_stall | ⏸️ Stub | Phase I with no advancement |
+| sbir_stall | ⏸️ Stub | Phase I with no advancement 24+ months |
 
 **Usage:**
 ```bash
@@ -120,7 +125,16 @@ python scripts/track_outcomes.py --since 2025-01-01 --dry-run
 python scripts/track_outcomes.py --since 2025-01-01 --detector new_contract
 ```
 
-### 4. Report Generation ✅ COMPLETE
+### 4. Entity Types ✅ COMPLETE
+**Files:** `processing/models.py` (EntityType enum)
+
+Clean entity type taxonomy after reclassification:
+- **STARTUP:** Emerging defense tech companies (core tracking population)
+- **PRIME:** Large defense contractors (L3, Rockwell Collins, Accenture, IBM, etc.)
+- **RESEARCH:** Universities, FFRDCs, APLs (Johns Hopkins APL, RAND, etc.)
+- **INVESTOR / AGENCY:** Schema exists, not yet populated
+
+### 5. Report Generation ✅ COMPLETE
 **Files:** `scripts/generate_prospect_report.py`, `scripts/generate_pdf_report.py`
 
 Generates branded PDF/Markdown reports for specific verticals:
@@ -132,7 +146,7 @@ Generates branded PDF/Markdown reports for specific verticals:
 
 ---
 
-## Key Decisions Made
+## Key Decisions Made and Why
 
 ### 1. Combined Score Formula (Execution-Weighted)
 ```
@@ -150,72 +164,86 @@ combined = 0.55 × norm_composite + 0.30 × policy_tailwind + 0.15 × contract_t
 - ≥$1M contracts: 1.0
 
 ### 2. China Pacing: Tag Not Weight
-**Decision:** `china_pacing` removed from weighted policy scoring. Applied as a tag for Pacific-relevant companies instead.
+**Decision:** `china_pacing` removed from weighted policy scoring. Applied as a boolean tag for Pacific-relevant companies instead.
 
-**Rationale:** Not a budget line item - it's a strategic posture that manifests through other priorities. Companies get `pacific_relevance: true` flag when relevant.
+**Rationale:** Not a budget line item — it's a strategic posture that manifests through other priorities (space, autonomous systems, contested logistics). Companies get `pacific_relevance: true` flag in their policy_alignment JSON when relevant. Keeping it as a weight would double-count capabilities already captured by the 10 priority areas.
 
-### 3. Entity Type Reclassification
-**Decision:** Split mislabeled "startups" into three categories:
-- **PRIME (263 entities):** Large contractors (L3, Rockwell Collins, Accenture, IBM, etc.)
+### 3. Entity Type Reclassification Approach
+**Decision:** Split mislabeled "startups" into proper categories via SQL reclassification:
+- **PRIME (263 reclassified → 405 total):** Large contractors (L3, Rockwell Collins, Accenture, IBM, etc.)
 - **RESEARCH (14 entities):** Universities, FFRDCs, APLs (Johns Hopkins APL, RAND, etc.)
-- **STARTUP (10 scaled):** Companies that grew large but started as startups (SpaceX, BlueHalo, etc.)
+- **STARTUP (10 "scaled"):** Companies that grew large but started as startups (SpaceX, BlueHalo, etc.) — kept as startup because their growth trajectory IS the signal
 
-**Rationale:** Outcome tracking was measuring prime contractor activity, not startup success. Clean entity types enable accurate signal validation.
+**Rationale:** Outcome tracking was measuring prime contractor activity, not startup success. Clean entity types enable accurate signal validation. A prime winning another contract is not a useful "outcome" — a startup winning its first production contract is.
 
 ### 4. Async Concurrency for API Calls
-**Decision:** Added `--async --concurrency 10` to policy alignment scorer.
+**Decision:** Added `--async --concurrency 10` to policy alignment scorer with `asyncio.Semaphore`.
 
-**Rationale:** Sequential processing was ~4 entities/min (4+ hours for 1,000). Async with semaphore achieves ~40 entities/min. Built-in retry for 429/503 errors.
+**Rationale:** Sequential processing was ~4 entities/min (4+ hours for 1,000). Async achieves ~40 entities/min. Pre-fetches all entity data synchronously, then runs concurrent Claude API calls. Built-in retry for 429/503 errors.
+
+### 5. Policy Weights from Budget Data
+**Decision:** Weights derived from actual FY25→FY26 President's Budget Request growth rates, not subjective importance.
+
+**Rationale:** Budget growth is the best available signal for where DoD is actually putting money. Space resilience gets highest weight (0.235) because it saw +38% growth. Hypersonics gets lowest (0.015) because it saw -43% cuts. This makes the scoring predictive of where contracts will flow.
 
 ---
 
-## Files Created/Modified (Feb 6, 2026)
+## Files Created/Modified
 
-### New Files
+### Session: Feb 6, 2026
 | File | Purpose |
 |------|---------|
-| `scripts/track_outcomes.py` | Outcome tracking script |
-| `reports/rf_comms_v2.md` | Updated RF report (55 companies) |
-| `reports/rf_comms_v2.pdf` | PDF version of RF report |
+| `scripts/track_outcomes.py` | **NEW** — Outcome tracking script with new_contract detector |
+| `reports/rf_comms_v2.md` | **NEW** — Updated RF report (55 companies) |
+| `reports/rf_comms_v2.pdf` | **NEW** — PDF version of RF report |
+| `processing/models.py` | **MODIFIED** — Added `OutcomeType` enum, `OutcomeEvent` model, `RESEARCH` entity type |
+| `processing/policy_alignment.py` | **MODIFIED** — Added async support, concurrency, skip-scored flag |
+| `config/policy_priorities.yaml` | **MODIFIED** — Externalized priority definitions and weights |
+| `processing/business_classifier.py` | **NEW** — LLM-based core business classification |
 
-### Modified Files
-| File | Changes |
+### Session: Feb 9, 2026
+| File | Purpose |
 |------|---------|
-| `processing/models.py` | Added `OutcomeType` enum, `OutcomeEvent` model, `RESEARCH` entity type |
-| `processing/policy_alignment.py` | Added async support, concurrency, skip-scored flag |
+| `docs/PROJECT_CONTEXT.md` | **UPDATED** — Comprehensive project context refresh |
+| `PROJECT_CONTEXT.md` | **UPDATED** — Root copy for easy access |
 
 ---
 
 ## Next Tasks (Priority Order)
 
-### Immediate (This Week)
-1. **Implement `funding_raise` detector** in `track_outcomes.py`
-   - Integrate with SEC EDGAR scraper
-   - Detect new Reg D filings for entities with signals
-   - Link back to related signals
+### Immediate
+1. **Implement `funding_raise` detector** in `scripts/track_outcomes.py`
+   - Wire up SEC EDGAR scraper (`scrapers/sec_edgar.py`) to detect new Reg D filings
+   - Match filings to entities with active signals
+   - Create `OutcomeEvent` with `outcome_type=FUNDING_RAISE`
+   - Link back to related signals, calculate `months_since_signal`
+   - Source key format: `reg_d:{filing_id}` for dedup
 
-2. **Refresh data pulls**
+2. **Refresh data pulls** (data is getting stale)
    - USASpending: `python scrapers/usaspending.py --start-date 2025-01-01`
    - SBIR: `python scrapers/sbir.py`
    - SEC EDGAR: `python scrapers/sec_edgar.py --start-date 2025-01-01`
+   - After refresh: re-run signal detection and outcome tracking
 
-3. **Validate RF report classifications** (spot-check completed Feb 6):
-   - PRONTO.AI → ✅ Correct (wireless mesh nodes)
-   - Leolabs Federal → ✅ Correct (S-Band phased array radar)
-   - PRASAD, SARITA → ✅ Correct (C-Band HPM RF Suite)
-   - LUNAR RESOURCES → ❌ Reclassified to OTHER (lunar mining company)
+3. **Spot-check RF report misclassifications**
+   - PRONTO.AI — verify rf_hardware classification (wireless mesh nodes)
+   - Leolabs Federal — verify rf_hardware classification (S-Band phased array radar)
+   - PRASAD, SARITA — verify rf_hardware classification (C-Band HPM RF Suite)
+   - LUNAR RESOURCES — was reclassified to OTHER (lunar mining company, not RF)
+   - Check for other false positives in the 55-company list
+
+4. **Build async concurrency into `policy_alignment.py`** (already discussed, low priority)
+   - Async mode already implemented and working
+   - Consider adding retry logic with exponential backoff for production runs
+   - Consider adding progress persistence for crash recovery on large batches
 
 ### Medium Priority
-4. **Classify remaining 3,431 entities**
-   - Run business classifier in batches
-   - Prioritize entities with active signals
+5. **Classify remaining 3,431 entities**
+   - Run business classifier in batches: `python -m processing.business_classifier --limit 100`
+   - Prioritize entities with active signals first
 
-5. **Reclassify Dynetics to PRIME**
-   - Acquired by Leidos in 2020
-   - Currently in "scaled startup" list
-
-### Lower Priority
-6. **Build async into policy_alignment.py** (already done, documented above)
+6. **Reclassify Dynetics to PRIME**
+   - Acquired by Leidos in 2020, currently in "scaled startup" list
 
 7. **Research AGILE-BOT LLC**
    - $88.9M in contracts, unclear if startup or contractor
@@ -225,32 +253,43 @@ combined = 0.55 × norm_composite + 0.30 × policy_tailwind + 0.15 × contract_t
 
 ## Strategic Roadmap (4 Phases)
 
-### Phase 1: Signal Validation (Current)
+### Phase 1: Signal Validation (Current — Q1 2026)
 **Goal:** Prove signals predict outcomes
-- ✅ Outcome tracking model built
-- ✅ new_contract detector working
-- ⏸️ Need more time/data to measure prediction accuracy
-- ⏸️ funding_raise and sbir_advance detectors pending
+**Timeline:** Now through March 2026
+- ✅ Outcome tracking model built (`OutcomeEvent` table, source_key dedup)
+- ✅ `new_contract` detector working (23 outcomes tracked)
+- ✅ Entity reclassification complete (clean startup population)
+- ⏸️ `funding_raise` detector — next to implement
+- ⏸️ `sbir_advance` detector — after funding_raise
+- ⏸️ Need 3-6 months of data to measure prediction accuracy
+- **Success metric:** Can show that entities with high composite scores win contracts at higher rates
 
-### Phase 2: Data Depth (Next)
-**Goal:** Comprehensive data coverage
-- [ ] Full USASpending backfill (current: 5K, target: 50K+)
+### Phase 2: Data Depth (Q2 2026)
+**Goal:** Comprehensive data coverage for better signal accuracy
+**Timeline:** April–June 2026
+- [ ] Full USASpending backfill (current: 5K contracts, target: 50K+)
 - [ ] Full SBIR historical pull (2015-present)
-- [ ] SAM.gov CAGE code enrichment
+- [ ] SAM.gov CAGE code enrichment (better entity matching)
 - [ ] FPDS integration for contract modifications
+- [ ] Classify all 3,431 remaining entities
+- **Success metric:** >90% of SBIR companies have complete data profiles
 
-### Phase 3: Product Surface
-**Goal:** User-facing tools
+### Phase 3: Product Surface (Q3 2026)
+**Goal:** User-facing tools that create workflow stickiness
+**Timeline:** July–September 2026
 - [ ] Weekly email alerts for tracked entities
-- [ ] Watchlist functionality
+- [ ] Watchlist functionality (per-user entity tracking)
 - [ ] Web dashboard / API
-- [ ] Automated report generation
+- [ ] Automated report generation (beyond manual RF report)
+- **Success metric:** 5+ active users checking alerts weekly
 
-### Phase 4: Network Effects
+### Phase 4: Network Effects (Q4 2026+)
 **Goal:** Multi-user value creation
+**Timeline:** October 2026+
 - [ ] User tagging and annotations
 - [ ] Consensus signals from multiple users
 - [ ] Community-validated classifications
+- **Success metric:** User contributions improve data quality measurably
 
 ---
 
@@ -266,27 +305,32 @@ defense-alpha/
 │   ├── models.py           # SQLAlchemy models (Entity, Contract, Signal, OutcomeEvent, etc.)
 │   ├── database.py         # DB connection and session management
 │   ├── entity_resolver.py  # Deduplication with fuzzy matching
+│   ├── entity_resolution/  # Advanced resolution (resolver.py, matchers.py)
 │   ├── business_classifier.py  # LLM-based core business classification
-│   ├── policy_alignment.py # NDS priority scoring (async support)
-│   ├── signal_detector.py  # All signal detection logic
+│   ├── policy_alignment.py # NDS priority scoring (sync + async)
+│   ├── signal_detector.py  # All signal detection logic (13 types)
 │   └── technology_tagger.py # Keyword-based tech categorization
 ├── scripts/
 │   ├── detect_signals.py
 │   ├── calculate_composite_scores.py
 │   ├── run_entity_resolution.py
+│   ├── tag_sbir_entities.py
 │   ├── find_similar.py     # Semantic search over SBIR embeddings
-│   ├── track_outcomes.py   # NEW: Outcome tracking for signal validation
+│   ├── track_outcomes.py   # Outcome tracking for signal validation
 │   ├── tech_clusters.py    # K-means clustering of SBIR abstracts
-│   └── generate_prospect_report.py # PDF/MD report generator
+│   ├── generate_prospect_report.py  # Markdown report generator
+│   └── generate_pdf_report.py       # PDF report generator
 ├── reports/
 │   ├── rf_comms_v2.md      # Latest RF report (55 companies)
 │   └── rf_comms_v2.pdf
 ├── config/
-│   └── policy_priorities.yaml  # NDS priority definitions and weights
+│   ├── policy_priorities.yaml  # NDS priority definitions and weights
+│   └── settings.py             # App configuration
 ├── data/
 │   └── defense_alpha.db    # SQLite database
 ├── docs/
 │   └── PROJECT_CONTEXT.md  # This file
+├── PROJECT_CONTEXT.md      # Root copy for easy access
 └── requirements.txt
 ```
 
@@ -302,7 +346,7 @@ headquarters_location, founded_date, technology_tags (JSON)
 website_url
 core_business (rf_hardware/software/systems_integrator/aerospace_platforms/components/services/other/unclassified)
 core_business_confidence, core_business_reasoning
-policy_alignment (JSON: scores, top_priorities, tailwind_score, pacific_relevance, reasoning)
+policy_alignment (JSON: scores, top_priorities, policy_tailwind_score, pacific_relevance, reasoning, scored_date)
 merged_into_id
 ```
 
@@ -325,7 +369,7 @@ id, entity_id (FK), signal_type, confidence_score (0-1)
 detected_date, evidence (JSON), status (active/expired/validated/false_positive)
 ```
 
-### outcome_events (NEW)
+### outcome_events
 ```sql
 id, entity_id (FK)
 outcome_type (new_contract/funding_raise/sbir_advance/acquisition/new_agency/recompete_loss/company_inactive/sbir_stall)
@@ -345,15 +389,16 @@ cd ~/projects/defense-alpha && source venv/bin/activate
 
 Defense intelligence platform with:
 - 4,503 entities (4,084 startups, 405 primes, 14 research)
-- 5,147 contracts ($805B), 3,632 funding events, 1,944 active signals
+- 5,147 contracts ($805B), 3,632 funding events, 1,944 signals (13 types)
 - 1,072 entities classified by core business
 - 1,038 entities scored for policy alignment
-- 23 outcome events tracked
+- 23 outcome events tracked (new_contract detector only)
 
 Current priorities:
 1. Implement funding_raise detector in track_outcomes.py
 2. Refresh data pulls from USASpending/SBIR/SEC EDGAR
-3. Classify remaining 3,431 entities
+3. Spot-check RF report misclassifications
+4. Classify remaining 3,431 entities
 
 Show me current DB stats to confirm state, then let's continue.
 ```
@@ -371,18 +416,20 @@ Show me current DB stats to confirm state, then let's continue.
 | Outcome tracking | `scripts/track_outcomes.py` |
 | Report generation | `scripts/generate_prospect_report.py` |
 | Semantic search | `scripts/find_similar.py` |
+| Policy config | `config/policy_priorities.yaml` |
+| DB models | `processing/models.py` |
 
 ---
 
 ## Strategic Context
 
 From recent analysis on defensibility:
-- **Moat is in data infrastructure** (pipelines, connectors, entity resolution) - not the LLM layer
-- **Classification is plumbing** - useful but not defensible
-- **Outcome tracking is defensible** - backtest which signals predict success
-- **Workflow integration creates stickiness** - alerts, watchlists, embedded in user's daily process
+- **Moat is in data infrastructure** (pipelines, connectors, entity resolution) — not the LLM layer
+- **Classification is plumbing** — useful but not defensible
+- **Outcome tracking is defensible** — backtest which signals predict success; this is the unique dataset
+- **Workflow integration creates stickiness** — alerts, watchlists, embedded in user's daily process
 
-Don (first client) feedback: "All new SBIR companies to me!" - validation that filtering works. He suggested targeting VCs + Primes as customers ("matchmaker" positioning).
+Don (first client) feedback: "All new SBIR companies to me!" — validation that filtering works. He suggested targeting VCs + Primes as customers ("matchmaker" positioning).
 
 ---
 
