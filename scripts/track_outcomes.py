@@ -207,7 +207,7 @@ def detect_new_contracts(
 
 
 # =============================================================================
-# DETECTOR: funding_raise (STUB)
+# DETECTOR: funding_raise
 # =============================================================================
 
 
@@ -215,15 +215,109 @@ def detect_funding_raises(
     db: Session, entity: Entity, since: date, dry_run: bool = False
 ) -> list[OutcomeEvent]:
     """
-    Detect new funding events (Reg D, VC rounds) since the given date.
+    Detect funding events (Reg D filings, VC rounds) that occurred AFTER
+    a signal was detected for this entity.
 
-    TODO: Implement when SEC EDGAR scraper is complete.
-    Will look for:
-    - New FundingEvent records with event_type in (VC_ROUND, REG_D_FILING)
-    - event_date >= since date
+    Logic: For entities with active signals, find any funding_events with
+    event_type in ('reg_d_filing', 'vc_round') where event_date is after
+    the entity's earliest signal detected_date. This detects cases where
+    we flagged a company and they subsequently raised private capital.
     """
-    # STUB: Not yet implemented
-    return []
+    outcomes = []
+
+    # Get active signals and find the earliest detection date
+    signals = get_active_signals_for_entity(db, entity.id)
+    if not signals:
+        return outcomes
+
+    signal_dates = [s.detected_date for s in signals if s.detected_date is not None]
+    if not signal_dates:
+        return outcomes
+
+    earliest_signal_date = min(signal_dates)
+    signal_ids = [s.id for s in signals]
+
+    # Skip entities with no defense footprint (0 SBIRs AND 0 contracts)
+    sbir_count = (
+        db.query(func.count(FundingEvent.id))
+        .filter(
+            FundingEvent.entity_id == entity.id,
+            FundingEvent.event_type.in_([
+                FundingEventType.SBIR_PHASE_1,
+                FundingEventType.SBIR_PHASE_2,
+                FundingEventType.SBIR_PHASE_3,
+            ]),
+        )
+        .scalar()
+    )
+    contract_count = (
+        db.query(func.count(Contract.id))
+        .filter(Contract.entity_id == entity.id)
+        .scalar()
+    )
+    if sbir_count == 0 and contract_count == 0:
+        return outcomes
+
+    # Find funding events after earliest signal date
+    funding_events = (
+        db.query(FundingEvent)
+        .filter(
+            FundingEvent.entity_id == entity.id,
+            FundingEvent.event_type.in_([
+                FundingEventType.REG_D_FILING,
+                FundingEventType.VC_ROUND,
+            ]),
+            FundingEvent.event_date >= earliest_signal_date,
+            FundingEvent.event_date >= since,
+        )
+        .all()
+    )
+
+    if not funding_events:
+        return outcomes
+
+    for fe in funding_events:
+        source_key = f"funding_{fe.id}"
+
+        # Deduplication: skip if already tracked
+        if outcome_exists(db, source_key):
+            continue
+
+        months = calculate_months_since_signal(fe.event_date, signals)
+
+        # Build details from funding event fields
+        details = {
+            "event_type": fe.event_type.value,
+            "round_stage": fe.round_stage,
+            "investors_awarders": fe.investors_awarders,
+            "source": fe.source,
+        }
+        # Include any raw_data fields that might be useful
+        if fe.raw_data:
+            for key in ("form_type", "filing_date", "cik", "accession_number"):
+                if key in fe.raw_data:
+                    details[key] = fe.raw_data[key]
+
+        source = fe.source or ("sec_edgar" if fe.event_type == FundingEventType.REG_D_FILING else "crunchbase")
+
+        outcome = OutcomeEvent(
+            entity_id=entity.id,
+            outcome_type=OutcomeType.FUNDING_RAISE,
+            outcome_date=fe.event_date,
+            outcome_value=fe.amount,
+            details=details,
+            source=source,
+            related_signal_ids=signal_ids,
+            months_since_signal=months,
+            source_key=source_key,
+        )
+
+        if not dry_run:
+            db.add(outcome)
+
+        outcomes.append(outcome)
+
+    return outcomes
 
 
 # =============================================================================
@@ -419,7 +513,17 @@ def run_outcome_tracking(
                         print(f"  + NEW_CONTRACT: {value_str}")
                     elif outcome.outcome_type == OutcomeType.FUNDING_RAISE:
                         stats.funding_raises += 1
-                        print(f"  + FUNDING_RAISE: ${outcome.outcome_value:,.0f}")
+                        value_str = (
+                            f"${outcome.outcome_value:,.0f}"
+                            if outcome.outcome_value
+                            else "N/A"
+                        )
+                        months_str = (
+                            f" ({outcome.months_since_signal}mo after signal)"
+                            if outcome.months_since_signal
+                            else ""
+                        )
+                        print(f"  + FUNDING_RAISE: {value_str}{months_str}")
                     elif outcome.outcome_type == OutcomeType.SBIR_ADVANCE:
                         stats.sbir_advances += 1
                         print(f"  + SBIR_ADVANCE")

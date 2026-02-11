@@ -38,6 +38,7 @@ class EntityType(PyEnum):
     RESEARCH = "research"  # Universities, FFRDCs, APLs, think tanks
     INVESTOR = "investor"
     AGENCY = "agency"
+    NON_DEFENSE = "non_defense"  # Commercial companies with no defense footprint
 
 
 class CoreBusiness(PyEnum):
