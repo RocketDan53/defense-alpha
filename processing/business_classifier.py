@@ -23,9 +23,16 @@ Usage:
 
     # Dry run (don't save to DB)
     python -m processing.business_classifier --all --dry-run
+
+    # Async with concurrency (10x faster)
+    python -m processing.business_classifier --all --async --concurrency 10
+
+    # Skip already-classified entities
+    python -m processing.business_classifier --all --async --concurrency 10 --skip-classified
 """
 
 import argparse
+import asyncio
 import json
 import logging
 import os
@@ -38,7 +45,7 @@ from typing import Optional
 # Add project root to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from anthropic import Anthropic
+from anthropic import Anthropic, AsyncAnthropic
 from sqlalchemy.orm import Session
 
 from config.settings import settings
@@ -258,6 +265,268 @@ def save_classification(db: Session, result: ClassificationResult, dry_run: bool
         db.commit()
 
 
+def prefetch_entity_data(db: Session, entities: list[Entity]) -> list[dict]:
+    """Pre-fetch all entity data including SBIR awards for async processing."""
+    data_list = []
+    for entity in entities:
+        awards = get_sbir_awards(db, entity.id)
+        data_list.append({
+            "id": entity.id,
+            "name": entity.canonical_name,
+            "location": entity.headquarters_location or "Unknown",
+            "awards": awards,
+        })
+    return data_list
+
+
+async def classify_entity_async(
+    client: AsyncAnthropic,
+    entity_data: dict,
+    model: str = "claude-sonnet-4-20250514",
+) -> Optional[ClassificationResult]:
+    """
+    Async version: Classify a single entity using Claude.
+
+    Args:
+        client: AsyncAnthropic client
+        entity_data: Pre-fetched entity data dict
+        model: Claude model to use
+
+    Returns:
+        ClassificationResult or None if classification failed
+    """
+    awards = entity_data["awards"]
+    entity_id = entity_data["id"]
+    entity_name = entity_data["name"]
+
+    if not awards:
+        logger.warning(f"No SBIR awards found for {entity_name}")
+        return None
+
+    # Build prompt
+    sbir_list = format_sbir_list(awards)
+    prompt = CLASSIFICATION_PROMPT.format(
+        company_name=entity_name,
+        location=entity_data["location"],
+        award_count=len(awards),
+        sbir_list=sbir_list,
+    )
+
+    try:
+        response = await client.messages.create(
+            model=model,
+            max_tokens=500,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        raw_text = response.content[0].text.strip()
+
+        # Parse JSON response - handle potential markdown code blocks
+        if raw_text.startswith("```"):
+            raw_text = raw_text.split("```")[1]
+            if raw_text.startswith("json"):
+                raw_text = raw_text[4:]
+            raw_text = raw_text.strip()
+
+        result = json.loads(raw_text)
+
+        # Map string to enum
+        classification_str = result.get("classification", "other").lower()
+        try:
+            classification = CoreBusiness(classification_str)
+        except ValueError:
+            logger.warning(f"Unknown classification '{classification_str}', defaulting to OTHER")
+            classification = CoreBusiness.OTHER
+
+        return ClassificationResult(
+            entity_id=entity_id,
+            entity_name=entity_name,
+            classification=classification,
+            confidence=float(result.get("confidence", 0.5)),
+            reasoning=result.get("reasoning", ""),
+            sbir_count=len(awards),
+            raw_response=raw_text,
+        )
+
+    except json.JSONDecodeError as e:
+        logger.error(f"Failed to parse JSON for {entity_name}: {e}")
+        return None
+    except Exception as e:
+        logger.error(f"Classification failed for {entity_name}: {e}")
+        return None
+
+
+async def process_entity_with_semaphore(
+    semaphore: asyncio.Semaphore,
+    client: AsyncAnthropic,
+    entity_data: dict,
+    index: int,
+    total: int,
+    model: str,
+) -> tuple[int, Optional[ClassificationResult]]:
+    """Process a single entity with semaphore for rate limiting."""
+    async with semaphore:
+        logger.info(f"[{index}/{total}] {entity_data['name']}")
+        result = await classify_entity_async(client, entity_data, model=model)
+        return index, result
+
+
+async def run_classification_async(
+    db: Session,
+    client: AsyncAnthropic,
+    entity_names: Optional[list[str]] = None,
+    limit: Optional[int] = None,
+    dry_run: bool = False,
+    model: str = "claude-sonnet-4-20250514",
+    concurrency: int = 10,
+    skip_classified: bool = False,
+) -> ClassifierStats:
+    """
+    Async version: Run classification with concurrent API calls.
+
+    Args:
+        db: Database session
+        client: AsyncAnthropic client
+        entity_names: Specific entity names to classify (None = all with SBIR)
+        limit: Max entities to process
+        dry_run: If True, don't save to database
+        model: Claude model to use
+        concurrency: Number of concurrent API calls
+        skip_classified: If True, skip entities that already have core_business set
+
+    Returns:
+        ClassifierStats with results
+    """
+    stats = ClassifierStats()
+
+    # Get entities to classify
+    if entity_names:
+        query = (
+            db.query(Entity)
+            .filter(
+                Entity.canonical_name.in_(entity_names),
+                Entity.merged_into_id.is_(None),
+            )
+        )
+        if skip_classified:
+            query = query.filter(
+                (Entity.core_business.is_(None)) | (Entity.core_business == CoreBusiness.UNCLASSIFIED)
+            )
+        entities = query.all()
+    else:
+        sbir_types = [
+            FundingEventType.SBIR_PHASE_1,
+            FundingEventType.SBIR_PHASE_2,
+            FundingEventType.SBIR_PHASE_3,
+        ]
+        entity_ids_with_sbir = (
+            db.query(FundingEvent.entity_id)
+            .filter(FundingEvent.event_type.in_(sbir_types))
+            .distinct()
+            .subquery()
+        )
+        query = (
+            db.query(Entity)
+            .filter(
+                Entity.id.in_(entity_ids_with_sbir),
+                Entity.merged_into_id.is_(None),
+                Entity.entity_type == EntityType.STARTUP,
+            )
+        )
+        if skip_classified:
+            query = query.filter(
+                (Entity.core_business.is_(None)) | (Entity.core_business == CoreBusiness.UNCLASSIFIED)
+            )
+        entities = query.all()
+
+    if limit:
+        entities = entities[:limit]
+
+    logger.info("=" * 70)
+    logger.info("BUSINESS CLASSIFIER (ASYNC)")
+    logger.info("=" * 70)
+    logger.info(f"Entities to process: {len(entities)}")
+    logger.info(f"Model: {model}")
+    logger.info(f"Concurrency: {concurrency}")
+    logger.info(f"Mode: {'DRY RUN' if dry_run else 'LIVE'}")
+    logger.info("=" * 70)
+
+    # Pre-fetch all entity data synchronously
+    logger.info("Pre-fetching entity data...")
+    entity_data_list = prefetch_entity_data(db, entities)
+    logger.info(f"Pre-fetched {len(entity_data_list)} entities\n")
+
+    # Create semaphore for rate limiting
+    semaphore = asyncio.Semaphore(concurrency)
+
+    # Create all tasks
+    tasks = [
+        process_entity_with_semaphore(
+            semaphore, client, entity_data, i, len(entity_data_list), model
+        )
+        for i, entity_data in enumerate(entity_data_list, 1)
+    ]
+
+    # Run all tasks concurrently
+    results = await asyncio.gather(*tasks)
+
+    # Process results and save to database
+    low_confidence_results = []
+
+    for index, result in results:
+        stats.total_processed += 1
+
+        if result:
+            stats.successful += 1
+            stats.by_category[result.classification.value] = (
+                stats.by_category.get(result.classification.value, 0) + 1
+            )
+
+            conf_indicator = "LOW" if result.confidence < 0.7 else "OK "
+            if result.confidence < 0.7:
+                stats.low_confidence += 1
+                low_confidence_results.append(result)
+
+            logger.info(
+                f"  -> {result.entity_name}: {result.classification.value:20} "
+                f"(conf: {result.confidence:.2f} {conf_indicator})"
+            )
+
+            save_classification(db, result, dry_run=dry_run)
+        else:
+            stats.failed += 1
+            entity_data = entity_data_list[index - 1]
+            logger.error(f"  -> {entity_data['name']}: FAILED")
+
+    # Summary
+    logger.info("\n" + "=" * 70)
+    logger.info("SUMMARY")
+    logger.info("=" * 70)
+    logger.info(f"Total processed: {stats.total_processed}")
+    logger.info(f"Successful: {stats.successful}")
+    logger.info(f"Failed: {stats.failed}")
+    logger.info(f"Low confidence (<0.7): {stats.low_confidence}")
+    logger.info("")
+    logger.info("By category:")
+    for cat, count in sorted(stats.by_category.items(), key=lambda x: -x[1]):
+        logger.info(f"  {cat:20}: {count}")
+
+    if low_confidence_results:
+        logger.info("\n" + "-" * 70)
+        logger.info("LOW CONFIDENCE CLASSIFICATIONS (manual review recommended):")
+        logger.info("-" * 70)
+        for r in low_confidence_results:
+            logger.info(f"  {r.entity_name}")
+            logger.info(f"    -> {r.classification.value} (conf: {r.confidence:.2f})")
+            logger.info(f"    -> {r.reasoning}")
+
+    if dry_run:
+        logger.info("\nDRY RUN - no changes saved to database.")
+    else:
+        logger.info("\nClassifications saved to database.")
+
+    return stats
+
+
 def run_classification(
     db: Session,
     client: Anthropic,
@@ -265,6 +534,7 @@ def run_classification(
     limit: Optional[int] = None,
     dry_run: bool = False,
     model: str = "claude-sonnet-4-20250514",
+    skip_classified: bool = False,
 ) -> ClassifierStats:
     """
     Run classification on entities.
@@ -276,6 +546,7 @@ def run_classification(
         limit: Max entities to process
         dry_run: If True, don't save to database
         model: Claude model to use
+        skip_classified: If True, skip entities that already have core_business set
 
     Returns:
         ClassifierStats with results
@@ -284,14 +555,18 @@ def run_classification(
 
     # Get entities to classify
     if entity_names:
-        entities = (
+        query = (
             db.query(Entity)
             .filter(
                 Entity.canonical_name.in_(entity_names),
                 Entity.merged_into_id.is_(None),
             )
-            .all()
         )
+        if skip_classified:
+            query = query.filter(
+                (Entity.core_business.is_(None)) | (Entity.core_business == CoreBusiness.UNCLASSIFIED)
+            )
+        entities = query.all()
     else:
         # Get entities with SBIR awards
         sbir_types = [
@@ -305,15 +580,19 @@ def run_classification(
             .distinct()
             .subquery()
         )
-        entities = (
+        query = (
             db.query(Entity)
             .filter(
                 Entity.id.in_(entity_ids_with_sbir),
                 Entity.merged_into_id.is_(None),
                 Entity.entity_type == EntityType.STARTUP,
             )
-            .all()
         )
+        if skip_classified:
+            query = query.filter(
+                (Entity.core_business.is_(None)) | (Entity.core_business == CoreBusiness.UNCLASSIFIED)
+            )
+        entities = query.all()
 
     if limit:
         entities = entities[:limit]
@@ -423,6 +702,23 @@ def main():
         default="claude-sonnet-4-20250514",
         help="Claude model to use (default: claude-sonnet-4-20250514)",
     )
+    parser.add_argument(
+        "--async",
+        dest="use_async",
+        action="store_true",
+        help="Use async concurrent processing (faster)",
+    )
+    parser.add_argument(
+        "--concurrency",
+        type=int,
+        default=10,
+        help="Number of concurrent API calls for async mode (default: 10)",
+    )
+    parser.add_argument(
+        "--skip-classified",
+        action="store_true",
+        help="Skip entities that already have core_business classifications",
+    )
 
     args = parser.parse_args()
 
@@ -432,46 +728,89 @@ def main():
         logger.error("ANTHROPIC_API_KEY not set in environment or .env file")
         sys.exit(1)
 
-    client = Anthropic(api_key=api_key)
     db = SessionLocal()
 
     try:
-        if args.test:
-            # Test on known problematic companies
-            test_companies = [
-                "HAVENLOCK INC",
-                "TETRATE.IO, INC.",
-                "MATRIXSPACE, INC",
-                "PHASE SENSITIVE INNOVATIONS INC",
-                "TERASPATIAL INC",
-                "THRUST AI LLC",
-                "ZENITH AEROSPACE INC",
-                "FOURTH STATE COMMUNICATIONS, LLC",
-                "SOLSTAR SPACE COMPANY",
-                "XL SCIENTIFIC LLC",
-            ]
-            run_classification(
-                db, client,
-                entity_names=test_companies,
-                dry_run=args.dry_run,
-                model=args.model,
-            )
-        elif args.names:
-            run_classification(
-                db, client,
-                entity_names=args.names,
-                dry_run=args.dry_run,
-                model=args.model,
-            )
-        elif args.all:
-            run_classification(
-                db, client,
-                limit=args.limit,
-                dry_run=args.dry_run,
-                model=args.model,
-            )
+        test_companies = [
+            "HAVENLOCK INC",
+            "TETRATE.IO, INC.",
+            "MATRIXSPACE, INC",
+            "PHASE SENSITIVE INNOVATIONS INC",
+            "TERASPATIAL INC",
+            "THRUST AI LLC",
+            "ZENITH AEROSPACE INC",
+            "FOURTH STATE COMMUNICATIONS, LLC",
+            "SOLSTAR SPACE COMPANY",
+            "XL SCIENTIFIC LLC",
+        ]
+
+        if args.use_async:
+            # Async concurrent mode
+            async_client = AsyncAnthropic(api_key=api_key)
+
+            async def run_async():
+                if args.test:
+                    return await run_classification_async(
+                        db, async_client,
+                        entity_names=test_companies,
+                        dry_run=args.dry_run,
+                        model=args.model,
+                        concurrency=args.concurrency,
+                        skip_classified=args.skip_classified,
+                    )
+                elif args.names:
+                    return await run_classification_async(
+                        db, async_client,
+                        entity_names=args.names,
+                        dry_run=args.dry_run,
+                        model=args.model,
+                        concurrency=args.concurrency,
+                        skip_classified=args.skip_classified,
+                    )
+                elif args.all:
+                    return await run_classification_async(
+                        db, async_client,
+                        limit=args.limit,
+                        dry_run=args.dry_run,
+                        model=args.model,
+                        concurrency=args.concurrency,
+                        skip_classified=args.skip_classified,
+                    )
+                else:
+                    parser.print_help()
+                    return None
+
+            asyncio.run(run_async())
         else:
-            parser.print_help()
+            # Sync sequential mode
+            client = Anthropic(api_key=api_key)
+
+            if args.test:
+                run_classification(
+                    db, client,
+                    entity_names=test_companies,
+                    dry_run=args.dry_run,
+                    model=args.model,
+                    skip_classified=args.skip_classified,
+                )
+            elif args.names:
+                run_classification(
+                    db, client,
+                    entity_names=args.names,
+                    dry_run=args.dry_run,
+                    model=args.model,
+                    skip_classified=args.skip_classified,
+                )
+            elif args.all:
+                run_classification(
+                    db, client,
+                    limit=args.limit,
+                    dry_run=args.dry_run,
+                    model=args.model,
+                    skip_classified=args.skip_classified,
+                )
+            else:
+                parser.print_help()
 
     finally:
         db.close()
