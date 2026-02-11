@@ -767,13 +767,16 @@ async def run_alignment_scoring_async(
             stats.successful += 1
 
             # Track high-alignment entities
-            if any(s >= 0.7 for s in result.scores.values()):
+            # Guard against malformed LLM responses where scores may be dicts
+            if any(isinstance(s, (int, float)) and s >= 0.7 for s in result.scores.values()):
                 stats.high_alignment += 1
 
             # Track by priority (only count known priorities)
             valid_priorities = {p.value for p in PolicyPriority}
             for priority, score in result.scores.items():
                 if priority not in valid_priorities:
+                    continue
+                if not isinstance(score, (int, float)):
                     continue
                 if score >= 0.7:
                     stats.by_priority[priority]["high"] += 1
