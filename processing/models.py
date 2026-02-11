@@ -279,6 +279,11 @@ class Signal(Base):
         Enum(SignalStatus), default=SignalStatus.ACTIVE, index=True
     )
 
+    # Freshness decay weight (1.0 = recent, 0.25 = stale) applied during scoring
+    freshness_weight: Mapped[Optional[Decimal]] = mapped_column(
+        Numeric(3, 2), default=Decimal("1.00")
+    )
+
     created_at: Mapped[datetime] = mapped_column(
         DateTime, default=func.now(), nullable=False
     )

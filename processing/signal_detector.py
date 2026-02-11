@@ -42,6 +42,7 @@ SIGNAL_FUNDING_VELOCITY = "funding_velocity"
 # Negative signals (risk indicators)
 SIGNAL_SBIR_STALLED = "sbir_stalled"
 SIGNAL_CUSTOMER_CONCENTRATION = "customer_concentration"
+SIGNAL_GONE_STALE = "gone_stale"
 
 # High-priority technology areas for defense
 HIGH_PRIORITY_TECH = {
@@ -89,6 +90,7 @@ class SignalDetector:
             "sbir_graduation_speed": self.detect_sbir_graduation_speed(),
             "time_to_contract": self.detect_time_to_contract(),
             "funding_velocity": self.detect_funding_velocity(),
+            "gone_stale": self.detect_gone_stale(),
         }
 
         self.db.commit()
@@ -1076,6 +1078,107 @@ class SignalDetector:
             count += 1
 
         return {"funding_velocity_signals": count}
+
+    def detect_gone_stale(self) -> dict:
+        """
+        Detect entities whose most recent signal is >24 months old AND have
+        no new contracts or funding events in that period.
+
+        This is a NEGATIVE signal (risk indicator) — the company was once
+        interesting but has gone quiet. Uses 24-month threshold to account
+        for slow defense procurement timelines.
+        """
+        count = 0
+        stale_cutoff = date.today() - timedelta(days=730)  # 24 months
+
+        # Get entities with active signals where ALL signals are old
+        entity_ids_with_signals = (
+            self.db.query(Signal.entity_id)
+            .filter(Signal.status == SignalStatus.ACTIVE)
+            .group_by(Signal.entity_id)
+            .having(func.max(Signal.detected_date) < stale_cutoff)
+            .all()
+        )
+
+        for (entity_id,) in entity_ids_with_signals:
+            entity = self.db.query(Entity).filter(
+                Entity.id == entity_id,
+                Entity.merged_into_id.is_(None),
+            ).first()
+            if not entity:
+                continue
+
+            # Check for recent contracts (award_date within 18 months)
+            recent_contracts = (
+                self.db.query(func.count(Contract.id))
+                .filter(
+                    Contract.entity_id == entity_id,
+                    Contract.award_date >= stale_cutoff,
+                )
+                .scalar() or 0
+            )
+            if recent_contracts > 0:
+                continue
+
+            # Check for recent funding events (any type, within 18 months)
+            recent_funding = (
+                self.db.query(func.count(FundingEvent.id))
+                .filter(
+                    FundingEvent.entity_id == entity_id,
+                    FundingEvent.event_date >= stale_cutoff,
+                )
+                .scalar() or 0
+            )
+            if recent_funding > 0:
+                continue
+
+            # Entity is stale — get details
+            most_recent_signal = (
+                self.db.query(Signal)
+                .filter(
+                    Signal.entity_id == entity_id,
+                    Signal.status == SignalStatus.ACTIVE,
+                )
+                .order_by(Signal.detected_date.desc())
+                .first()
+            )
+
+            if not most_recent_signal:
+                continue
+
+            months_since = (date.today() - most_recent_signal.detected_date).days // 30
+
+            # Active signal count for this entity
+            active_count = (
+                self.db.query(func.count(Signal.id))
+                .filter(
+                    Signal.entity_id == entity_id,
+                    Signal.status == SignalStatus.ACTIVE,
+                )
+                .scalar()
+            )
+
+            # Higher confidence the longer they've been quiet
+            confidence = min(HIGH_CONFIDENCE, Decimal(str(0.60 + months_since * 0.01)))
+
+            self._create_or_update_signal(
+                entity_id=entity_id,
+                signal_type=SIGNAL_GONE_STALE,
+                confidence=confidence,
+                detected_date=date.today(),
+                evidence={
+                    "months_since_last_signal": months_since,
+                    "most_recent_signal_type": most_recent_signal.signal_type,
+                    "most_recent_signal_date": str(most_recent_signal.detected_date),
+                    "active_signal_count": active_count,
+                    "recent_contracts": 0,
+                    "recent_funding_events": 0,
+                    "entity_name": entity.canonical_name,
+                },
+            )
+            count += 1
+
+        return {"gone_stale_signals": count}
 
 
 def get_signal_summary(db: Session) -> dict:
