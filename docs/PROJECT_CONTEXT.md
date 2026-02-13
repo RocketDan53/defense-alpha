@@ -18,35 +18,27 @@ A Python-based defense intelligence platform that aggregates government and priv
 ### Entity Counts by Type
 | Type | Count | Description |
 |------|-------|-------------|
-| STARTUP | 8,770 | Emerging defense tech companies (core tracking population) |
+| STARTUP | 9,328 | Emerging defense tech companies (core tracking population) |
 | PRIME | 864 | Large defense contractors |
-| NON_DEFENSE | 558 | Commercial companies with no defense footprint (SEC EDGAR only) |
 | RESEARCH | 22 | Universities, FFRDCs, APLs |
-| INVESTOR | 0 | (Not yet populated) |
-| AGENCY | 0 | (Not yet populated) |
 | **Total (unmerged)** | **10,214** | After entity resolution (834 merges from 11,048) |
 
-### Entity Counts by Core Business (5,488 classified)
-| Classification | Count | Examples |
-|----------------|-------|----------|
-| components | 2,159 | Sensors, materials, subsystems, manufacturing equipment |
-| software | 1,912 | AI/ML, cybersecurity, C2 software, platforms |
-| other | 608 | Doesn't fit categories (medical, water purification, etc.) |
-| rf_hardware | 310 | Radios, antennas, radar, EW systems |
-| aerospace_platforms | 270 | Drones, satellites, spacecraft, eVTOL aircraft |
-| services | 174 | Consulting, support, training, R&D services |
-| systems_integrator | 55 | Solution integrators |
-| (not yet classified) | ~3,282 | Remaining startups awaiting classification |
+### Classification Pipeline Status
+| Stage | Count | Description |
+|-------|-------|-------------|
+| Fully classified + policy scored | 5,481 | Business classification + policy alignment complete |
+| Unclassified | 3,289 | Need business classifier run before policy scoring |
+| Non-defense (excluded) | 558 | No defense footprint (0 SBIRs, 0 contracts, SEC EDGAR only) |
 
 ### Data Volumes
 | Table | Records | Value | Notes |
 |-------|---------|-------|-------|
 | Contracts | 13,340 | $1.16T | USASpending data |
 | Funding Events | 29,523 | - | SBIR + Reg D + VC combined |
-| Signals | 14,426 | - | 15 signal types (active only) |
+| Signals | 14,502 | - | 14 signal types (active only), tiered freshness decay |
 | Outcome Events | 114 | - | 23 new_contract + 91 funding_raise |
 | SBIR Embeddings | 27,529 | - | 100% coverage, all-MiniLM-L6-v2 |
-| Policy Alignments | ~1,010 | - | Async scoring in progress (~4,478 total expected) |
+| Policy Alignments | 5,481 | - | All eligible entities scored (requires SBIR + classified business) |
 | Entity Merges | 834 | - | High-confidence auto-merges |
 | Review Queue | 201,328 | - | Pairs flagged for manual review |
 
@@ -79,7 +71,7 @@ Scores entities against FY2026 National Defense Strategy priorities:
 - Async concurrency support (`--async --concurrency 10`, ~40 entities/min)
 - `--skip-scored` flag to resume interrupted runs
 - Pacific/Indo-Pacific relevance flagging (boolean tag, not weighted)
-- ~1,010 entities scored, async batch in progress for remaining
+- **5,481 entities scored** (all startups with SBIR events + classified core business)
 
 **Priority Areas (with FY26 budget weights):**
 | Priority | Weight | FY26 Growth |
@@ -101,7 +93,7 @@ python -m processing.policy_alignment --all --async --concurrency 10 --skip-scor
 python -m processing.policy_alignment --names "SHIELD AI" "ANDURIL"
 ```
 
-### 3. Signal Detection ✅ COMPLETE (15 signal types)
+### 3. Signal Detection ✅ COMPLETE (14 signal types, tiered freshness decay)
 **Files:** `processing/signal_detector.py`, `scripts/detect_signals.py`
 
 | Signal Type | Count | Weight | Decay Profile | Description |
@@ -111,9 +103,9 @@ python -m processing.policy_alignment --names "SHIELD AI" "ANDURIL"
 | sbir_graduation_speed | 2,413 | +1.5 | SLOW_DECAY | Fast SBIR phase progression |
 | customer_concentration | 1,183 | -1.5 | NO_DECAY | >80% revenue from one agency |
 | multi_agency_interest | 758 | +1.5 | NO_DECAY | Contracts from 3+ agencies |
-| **gone_stale** | **351** | **-1.5** | **NO_DECAY** | **No activity in 24+ months** |
 | first_dod_contract | 422 | +1.0 | FAST_DECAY | New entrant to defense |
 | sbir_stalled | 417 | -2.0 | NO_DECAY | 2+ Phase I, zero Phase II |
+| gone_stale | 351 | -1.5 | NO_DECAY | No activity in 24+ months |
 | sbir_to_contract_transition | 323 | +3.0 | SLOW_DECAY | SBIR to procurement pipeline |
 | funding_velocity | 319 | +1.5 | FAST_DECAY | 2+ Reg D filings in 18 months |
 | time_to_contract | 299 | +2.0 | SLOW_DECAY | Quick SBIR to procurement |
@@ -155,7 +147,7 @@ Tracks what happens to entities after signals are detected:
 | Type | Status | Count | Description |
 |------|--------|-------|-------------|
 | new_contract | ✅ Working | 23 | Won DoD/federal contract |
-| funding_raise | ✅ Working | 91 | New Reg D / VC round ($2.66B total, 80.2% true predictions) |
+| funding_raise | ✅ Working | 91 | New Reg D / VC round ($2.66B total, 80% true predictions) |
 | sbir_advance | Stub | 0 | Phase progression (I->II->III) |
 | acquisition | Stub | 0 | Acquired by another entity |
 | new_agency | Stub | 0 | Contract with new DoD branch |
@@ -163,8 +155,10 @@ Tracks what happens to entities after signals are detected:
 | company_inactive | Stub | 0 | No activity 12+ months |
 | sbir_stall | Stub | 0 | Phase I with no advancement 24+ months |
 
+**Key finding:** SBIR phase transitions predict private capital raises ~3 years ahead (35-month median lead time).
+
 **Funding raise validation stats:**
-- 80.2% true predictions (funding happened after signal fired)
+- 80% true predictions (funding happened after signal fired)
 - Median lead time: 35 months
 - Top signal predictors: sbir_to_vc_raise (75), high_priority_tech (58), sbir_phase_2_transition (47)
 - Filter: skips entities with 0 SBIRs AND 0 contracts (prevents SEC EDGAR noise)
@@ -211,7 +205,7 @@ python scripts/find_similar.py --embed  # Regenerate embeddings
 
 | Type | Count | Description |
 |------|-------|-------------|
-| STARTUP | 8,770 | Core tracking population |
+| STARTUP | 9,328 | Core tracking population |
 | PRIME | 864 | Large defense contractors |
 | NON_DEFENSE | 558 | No defense footprint (0 SBIRs, 0 contracts) |
 | RESEARCH | 22 | Universities, FFRDCs, APLs |
@@ -388,13 +382,14 @@ I'm working on defense-alpha at ~/projects/defense-alpha
 cd ~/projects/defense-alpha && source venv/bin/activate
 
 Defense intelligence platform with:
-- 10,214 entities (8,770 startups, 864 primes, 558 non-defense, 22 research)
+- 10,214 entities (9,328 startups, 864 primes, 22 research)
+- 5,481 fully classified + policy scored
+- 3,289 unclassified (need business classifier)
 - 13,340 contracts ($1.16T), 29,523 funding events
-- 14,426 active signals (15 types, freshness-weighted)
-- 5,488 entities classified by core business
-- 114 outcome events (23 contracts, 91 funding raises — 80.2% true predictions)
-- 27,529 SBIR embeddings (100% coverage)
-- Pipeline orchestrator: scripts/run_pipeline.py
+- 14,502 signals (14 types, tiered freshness decay)
+- 114 outcome events (23 contracts, 91 funding raises — 80% prediction rate, 35mo lead)
+- 27,529 SBIR embeddings (full coverage)
+- Key finding: SBIR phase transitions predict private raises ~3 years ahead
 
 Current priorities: see Next Tasks section below.
 
@@ -403,36 +398,40 @@ Show me current DB stats to confirm state, then let's continue.
 
 ---
 
+## Infrastructure Complete
+
+- ✅ Pipeline orchestrator (`scripts/run_pipeline.py`)
+- ✅ Async classifiers (business + policy, `--async --concurrency 10`)
+- ✅ Tiered signal decay (FAST_DECAY / SLOW_DECAY / NO_DECAY)
+- ✅ Gone stale detection (24-month threshold)
+- ✅ Funding raise + contract outcome detectors
+- ✅ Full SBIR embeddings (27,529, all-MiniLM-L6-v2)
+
+---
+
 ## Next Session Priorities
 
-### 1. Verify Policy Alignment Scorer Completed
-- Background task was at 90% (4,031/4,478) when this session ended
-- Check: `SELECT COUNT(*) FROM entities WHERE policy_alignment IS NOT NULL AND merged_into_id IS NULL`
-- If incomplete, re-run: `python -m processing.policy_alignment --all --skip-scored --async --concurrency 10`
-- Expected final count: ~4,478+ entities scored (all classified startups with SBIRs)
-
-### 2. RAG Integration
-- Add retrieval-augmented generation for entity research
-- Use SBIR embeddings (27,529 titles, all-MiniLM-L6-v2) as retrieval layer
+### 1. RAG Integration (connect embeddings to Claude)
+- Connect SBIR embeddings (27,529 titles, all-MiniLM-L6-v2) to Claude for retrieval-augmented generation
 - Enable queries like: "What companies are working on contested logistics in space?"
 - Could extend `find_similar.py` or build a new `scripts/rag_query.py`
 - Consider: Should RAG use SBIR abstracts (richer) or just titles (already embedded)?
 
-### 3. Data Validation Layer
+### 2. Data Validation Layer
 - Build automated data quality checks that run before/after pipeline
 - Validate: no orphaned contracts, no duplicate source_keys, entity type distribution sanity
 - Check for entity merges that broke signal/outcome links
 - Detect anomalies: entities with $1B+ contracts but entity_type=STARTUP
 - Could be a new step in `run_pipeline.py` or standalone `scripts/validate_data.py`
 
-### 4. Policy Headwind Signal
+### 3. Policy Headwind Signal
 - New negative signal: entity works primarily in areas with declining budget
 - Inverse of `high_priority_technology` — flags companies in shrinking areas (e.g., hypersonics -43%)
 - Use policy_alignment scores: if top priorities are all low-weight/declining, fire signal
 - Weight: -1.0 to -1.5, NO_DECAY profile
 - Add to `signal_detector.py` alongside existing negative signals
 
-### 5. Remaining Outcome Detectors (6 stubs)
+### 4. Remaining Outcome Detectors (6 stubs)
 Priority order:
 1. **sbir_advance** — Phase progression I->II->III. Compare funding_events before/after signal.
 2. **new_agency** — Contract with new DoD branch. Check contracting_agency vs historical.
@@ -441,11 +440,19 @@ Priority order:
 5. **acquisition** — Check for merged_into_id changes or acquisition funding events.
 6. **recompete_loss** — Hardest: requires tracking contract end dates and renewal patterns.
 
+### 5. Classify Remaining 3,289 Entities
+- Run business classifier: `python -m processing.business_classifier --all --async --concurrency 10 --skip-classified`
+- Then policy alignment: `python -m processing.policy_alignment --all --skip-scored --async --concurrency 10`
+
+### 6. Generate Defense Software Report (second vertical)
+- Follow RF & Communications report pattern (`reports/rf_comms_v2.md`)
+- Filter for `core_business = 'software'` (1,912 entities)
+- Top companies by combined score with software focus
+
 ### Medium Priority
-6. **Classify remaining ~3,282 entities** — Run business classifier on unclassified startups
-7. **Refresh data pulls** — USASpending (30 days), SBIR (current year), SEC EDGAR (90 days)
-8. **Generate updated reports** — New RF report, potentially software/aerospace verticals
-9. **Review entity resolution queue** — 201,328 pairs in `data/review_queue.csv`
+- **Refresh data pulls** — USASpending (30 days), SBIR (current year), SEC EDGAR (90 days)
+- **Generate updated RF report** — Refresh with latest signal/policy data
+- **Review entity resolution queue** — 201,328 pairs in `data/review_queue.csv`
 
 ---
 
@@ -471,7 +478,7 @@ Priority order:
 
 **Moat is in data infrastructure** (pipelines, connectors, entity resolution) — not the LLM layer. Classification is plumbing. **Outcome tracking is defensible** — backtest which signals predict success; this is the unique dataset. **Workflow integration creates stickiness** — alerts, watchlists, embedded in user's daily process.
 
-**Key validation:** Funding raise detector shows 80.2% true prediction rate with 35-month median lead time. Signals fire well before capital raises happen.
+**Key validation:** Funding raise detector shows 80% true prediction rate with 35-month median lead time. SBIR phase transitions predict private capital raises ~3 years ahead — this is the core defensible insight.
 
 Don (first client) feedback: "All new SBIR companies to me!" He suggested targeting VCs + Primes as customers ("matchmaker" positioning).
 
