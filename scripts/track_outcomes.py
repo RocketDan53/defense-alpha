@@ -259,7 +259,7 @@ def detect_funding_raises(
         return outcomes
 
     # Find funding events after earliest signal date
-    funding_events = (
+    funding_events_raw = (
         db.query(FundingEvent)
         .filter(
             FundingEvent.entity_id == entity.id,
@@ -273,8 +273,19 @@ def detect_funding_raises(
         .all()
     )
 
-    if not funding_events:
+    if not funding_events_raw:
         return outcomes
+
+    # Deduplicate: SEC EDGAR amended filings create rows with
+    # identical (entity_id, event_date, amount). Keep one per group.
+    seen_keys = set()
+    funding_events = []
+    for fe in funding_events_raw:
+        dedup_key = (str(fe.entity_id), str(fe.event_date), str(fe.amount))
+        if dedup_key in seen_keys:
+            continue
+        seen_keys.add(dedup_key)
+        funding_events.append(fe)
 
     for fe in funding_events:
         source_key = f"funding_{fe.id}"

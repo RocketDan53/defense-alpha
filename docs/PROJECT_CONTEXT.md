@@ -223,6 +223,27 @@ Generates branded PDF/Markdown reports for specific verticals:
 - Execution-weighted combined scoring
 - Top 10 detailed profiles with policy analysis
 
+### 10. RAG Engine ✅ COMPLETE
+**Files:** `processing/rag_engine.py`, `scripts/rag_query.py`
+
+Retrieval-augmented generation connecting semantic search to Claude reasoning:
+- Semantic retrieval over 27,529 SBIR embeddings (all-MiniLM-L6-v2, loaded into memory on init ~40MB)
+- Entity enrichment: signals, policy alignment, contracts, funding, composite scores (2 DB queries per entity)
+- Claude reasoning with structured JSON output (relevant_companies, watchlist, gaps, summary)
+- Filters: `core_business`, `min_composite`, `entity_type`
+- Token budget management (12K default, drops lowest-similarity entities first)
+- Similarity threshold: 0.25 minimum, warns if <3 entities remain
+- `to_report_input()` bridges RAG results to PDF report generator
+- End-to-end latency: ~19s including Claude reasoning
+
+**Usage:**
+```bash
+python scripts/rag_query.py "companies building counter-drone RF systems" --raw   # Verify context
+python scripts/rag_query.py "jam-resistant tactical radios for Pacific ops"        # Full pipeline
+python scripts/rag_query.py "mesh networking" --filter-business software --min-score 2.0
+python scripts/rag_query.py "autonomous underwater vehicles" --report              # JSON for reports
+```
+
 ---
 
 ## Key Decisions Made and Why
@@ -406,39 +427,35 @@ Show me current DB stats to confirm state, then let's continue.
 - ✅ Gone stale detection (24-month threshold)
 - ✅ Funding raise + contract outcome detectors
 - ✅ Full SBIR embeddings (27,529, all-MiniLM-L6-v2)
+- ✅ RAG engine (`processing/rag_engine.py` + `scripts/rag_query.py`)
 
 ---
 
 ## Next Session Priorities
 
-### 1. RAG Integration (connect embeddings to Claude)
-- Connect SBIR embeddings (27,529 titles, all-MiniLM-L6-v2) to Claude for retrieval-augmented generation
-- Enable queries like: "What companies are working on contested logistics in space?"
-- Could extend `find_similar.py` or build a new `scripts/rag_query.py`
-- Consider: Should RAG use SBIR abstracts (richer) or just titles (already embedded)?
-
-### 2. Data Validation Layer
+### 1. Data Validation Layer
 - Build automated data quality checks that run before/after pipeline
 - Validate: no orphaned contracts, no duplicate source_keys, entity type distribution sanity
 - Check for entity merges that broke signal/outcome links
 - Detect anomalies: entities with $1B+ contracts but entity_type=STARTUP
 - Could be a new step in `run_pipeline.py` or standalone `scripts/validate_data.py`
 
-### 3. Policy Headwind Signal
+### 2. Policy Headwind Signal
 - New negative signal: entity works primarily in areas with declining budget
 - Inverse of `high_priority_technology` — flags companies in shrinking areas (e.g., hypersonics -43%)
 - Use policy_alignment scores: if top priorities are all low-weight/declining, fire signal
 - Weight: -1.0 to -1.5, NO_DECAY profile
 - Add to `signal_detector.py` alongside existing negative signals
 
-### 4. Remaining Outcome Detectors (6 stubs)
-Priority order:
+### 3. Remaining Outcome Detectors (3 priority stubs)
 1. **sbir_advance** — Phase progression I->II->III. Compare funding_events before/after signal.
 2. **new_agency** — Contract with new DoD branch. Check contracting_agency vs historical.
 3. **company_inactive** — No new contracts/funding/SBIRs in 12+ months.
-4. **sbir_stall** — Phase I with no Phase II after 24+ months (mirrors sbir_stalled signal).
-5. **acquisition** — Check for merged_into_id changes or acquisition funding events.
-6. **recompete_loss** — Hardest: requires tracking contract end dates and renewal patterns.
+
+### 4. Competitive Mapping
+- Given a target company, find competitors via SBIR embedding similarity
+- Extend RAG engine or build standalone `scripts/competitive_map.py`
+- Cross-reference overlapping agencies, NAICS codes, and policy priorities
 
 ### 5. Classify Remaining 3,289 Entities
 - Run business classifier: `python -m processing.business_classifier --all --async --concurrency 10 --skip-classified`
@@ -453,6 +470,7 @@ Priority order:
 - **Refresh data pulls** — USASpending (30 days), SBIR (current year), SEC EDGAR (90 days)
 - **Generate updated RF report** — Refresh with latest signal/policy data
 - **Review entity resolution queue** — 201,328 pairs in `data/review_queue.csv`
+- **Remaining outcome stubs** — sbir_stall, acquisition, recompete_loss (lower priority)
 
 ---
 
@@ -468,6 +486,8 @@ Priority order:
 | Outcome tracking | `scripts/track_outcomes.py` |
 | Entity resolution | `processing/entity_resolver.py` |
 | Semantic search | `scripts/find_similar.py` |
+| RAG engine | `processing/rag_engine.py` |
+| RAG CLI | `scripts/rag_query.py` |
 | Report generation | `scripts/generate_prospect_report.py` |
 | Policy config | `config/policy_priorities.yaml` |
 | DB models | `processing/models.py` |

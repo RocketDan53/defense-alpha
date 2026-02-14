@@ -33,6 +33,7 @@ SIGNAL_MULTI_AGENCY = "multi_agency_interest"
 SIGNAL_OUTSIZED_AWARD = "outsized_award"
 SIGNAL_SBIR_TO_CONTRACT = "sbir_to_contract_transition"
 SIGNAL_SBIR_TO_VC = "sbir_to_vc_raise"
+SIGNAL_SBIR_VALIDATED_RAISE = "sbir_validated_raise"
 
 # Timing-based signals
 SIGNAL_SBIR_GRADUATION_SPEED = "sbir_graduation_speed"
@@ -54,6 +55,24 @@ HIGH_PRIORITY_TECH = {
 HIGH_CONFIDENCE = Decimal("0.90")
 MEDIUM_CONFIDENCE = Decimal("0.75")
 LOW_CONFIDENCE = Decimal("0.60")
+
+
+def _dedup_regd_filings(filings):
+    """Remove duplicate Reg D filings (same entity, same date, same amount).
+
+    SEC EDGAR often contains amended filings that duplicate the original.
+    When two filings share entity_id + event_date + amount, keep one.
+    Returns deduplicated list.
+    """
+    seen = set()
+    deduped = []
+    for f in filings:
+        key = (str(f.entity_id), str(f.event_date), str(f.amount))
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(f)
+    return deduped
 
 
 class SignalDetector:
@@ -85,6 +104,7 @@ class SignalDetector:
             "outsized_awards": self.detect_outsized_awards(cutoff_date),
             "sbir_to_contract": self.detect_sbir_to_contract(),
             "sbir_to_vc": self.detect_sbir_to_vc_raise(),
+            "sbir_validated_raise": self.detect_sbir_validated_raise(),
             "sbir_stalled": self.detect_sbir_stalled(),
             "customer_concentration": self.detect_customer_concentration(),
             "sbir_graduation_speed": self.detect_sbir_graduation_speed(),
@@ -642,11 +662,12 @@ class SignalDetector:
             )
             total_sbir = sum(float(a.amount or 0) for a in sbir_awards)
 
-            # Get Reg D summary
-            regd_filings = self.db.query(FundingEvent).filter(
+            # Get Reg D summary (deduplicated)
+            regd_filings_raw = self.db.query(FundingEvent).filter(
                 FundingEvent.entity_id == entity.id,
                 FundingEvent.event_type == FundingEventType.REG_D_FILING,
             ).all()
+            regd_filings = _dedup_regd_filings(regd_filings_raw)
 
             total_regd = sum(float(f.amount or 0) for f in regd_filings)
             latest_regd = max(
@@ -693,6 +714,161 @@ class SignalDetector:
             count += 1
 
         return {"sbir_to_vc_signals": count}
+
+    def detect_sbir_validated_raise(self) -> dict:
+        """
+        Strict version of sbir_to_vc_raise: detects entities where SBIR
+        traction preceded and plausibly influenced private capital raises.
+
+        Requires EITHER:
+          A) The entity's first Reg D filing postdates its first SBIR award
+             (entire VC history follows SBIR entry), OR
+          B) A Reg D filing occurred within 18 months after an SBIR Phase II
+             (Phase II milestone was the catalyst).
+
+        Confidence scoring (additive, capped at 0.95):
+          Base  0.70  — any Reg D postdates any SBIR
+          +0.10       — first Reg D postdates first SBIR (pure pathway)
+          +0.10       — Reg D within 18 months of Phase II (catalyst)
+          +0.05       — post-SBIR raise amount > $5M (meaningful capital)
+        """
+        count = 0
+        phase2_window_days = 548  # ~18 months
+
+        sbir_types = [
+            FundingEventType.SBIR_PHASE_1,
+            FundingEventType.SBIR_PHASE_2,
+            FundingEventType.SBIR_PHASE_3,
+        ]
+
+        # Find entities that have both SBIR awards and Reg D filings
+        sbir_entity_ids = (
+            self.db.query(FundingEvent.entity_id)
+            .filter(FundingEvent.event_type.in_(sbir_types))
+            .distinct()
+        )
+        regd_entity_ids = (
+            self.db.query(FundingEvent.entity_id)
+            .filter(FundingEvent.event_type == FundingEventType.REG_D_FILING)
+            .distinct()
+        )
+
+        entities = self.db.query(Entity).filter(
+            Entity.id.in_(sbir_entity_ids.scalar_subquery()),
+            Entity.id.in_(regd_entity_ids.scalar_subquery()),
+            Entity.merged_into_id.is_(None),
+        ).all()
+
+        for entity in entities:
+            # Fetch all SBIR awards with dates
+            sbir_awards = self.db.query(FundingEvent).filter(
+                FundingEvent.entity_id == entity.id,
+                FundingEvent.event_type.in_(sbir_types),
+            ).all()
+
+            sbir_with_dates = [a for a in sbir_awards if a.event_date]
+            if not sbir_with_dates:
+                continue
+
+            first_sbir_date = min(a.event_date for a in sbir_with_dates)
+
+            # Phase II awards specifically (for catalyst check)
+            phase2_awards = [
+                a for a in sbir_with_dates
+                if a.event_type == FundingEventType.SBIR_PHASE_2
+            ]
+
+            # Fetch all Reg D filings with dates (deduplicated)
+            regd_filings_raw = self.db.query(FundingEvent).filter(
+                FundingEvent.entity_id == entity.id,
+                FundingEvent.event_type == FundingEventType.REG_D_FILING,
+            ).all()
+            regd_filings = _dedup_regd_filings(regd_filings_raw)
+
+            regd_with_dates = [f for f in regd_filings if f.event_date]
+            if not regd_with_dates:
+                continue
+
+            first_regd_date = min(f.event_date for f in regd_with_dates)
+            latest_regd_date = max(f.event_date for f in regd_with_dates)
+
+            # ── Check trigger conditions ──────────────────────────
+
+            # Condition A: first Reg D postdates first SBIR
+            sbir_first_pathway = first_regd_date > first_sbir_date
+
+            # Condition B: any Reg D within 18 months after a Phase II
+            phase2_catalyst = False
+            phase2_gap_months = None
+            for p2 in phase2_awards:
+                for rd in regd_with_dates:
+                    gap = (rd.event_date - p2.event_date).days
+                    if 0 < gap <= phase2_window_days:
+                        phase2_catalyst = True
+                        gap_mo = round(gap / 30.44)
+                        if phase2_gap_months is None or gap_mo < phase2_gap_months:
+                            phase2_gap_months = gap_mo
+                        break
+                if phase2_catalyst:
+                    break
+
+            # Must satisfy at least one condition
+            if not sbir_first_pathway and not phase2_catalyst:
+                continue
+
+            # ── Confidence scoring ────────────────────────────────
+
+            confidence = Decimal("0.70")
+
+            if sbir_first_pathway:
+                confidence += Decimal("0.10")
+
+            if phase2_catalyst:
+                confidence += Decimal("0.10")
+
+            # Post-SBIR raise amount
+            raise_amount_post_sbir = sum(
+                float(f.amount or 0)
+                for f in regd_with_dates
+                if f.event_date > first_sbir_date
+            )
+            if raise_amount_post_sbir > 5_000_000:
+                confidence += Decimal("0.05")
+
+            confidence = min(Decimal("0.95"), confidence)
+
+            # ── Classify the sequence ─────────────────────────────
+
+            if sbir_first_pathway:
+                sequence = "sbir_first"
+            elif first_regd_date < first_sbir_date:
+                sequence = "mixed"
+            else:
+                sequence = "vc_first"
+
+            # ── Store signal ──────────────────────────────────────
+
+            self._create_or_update_signal(
+                entity_id=entity.id,
+                signal_type=SIGNAL_SBIR_VALIDATED_RAISE,
+                confidence=confidence,
+                detected_date=latest_regd_date or date.today(),
+                evidence={
+                    "entity_name": entity.canonical_name,
+                    "first_sbir_date": str(first_sbir_date),
+                    "first_regd_date": str(first_regd_date),
+                    "sbir_award_count": len(sbir_awards),
+                    "regd_filing_count": len(regd_filings),
+                    "raise_amount_post_sbir": raise_amount_post_sbir,
+                    "sequence": sequence,
+                    "sbir_first_pathway": sbir_first_pathway,
+                    "phase2_catalyst": phase2_catalyst,
+                    "phase2_to_raise_gap_months": phase2_gap_months,
+                },
+            )
+            count += 1
+
+        return {"sbir_validated_raise_signals": count}
 
     def detect_sbir_stalled(self) -> dict:
         """
