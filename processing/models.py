@@ -428,3 +428,69 @@ class SbirEmbedding(Base):
 
     def __repr__(self) -> str:
         return f"<SbirEmbedding(id={self.id}, title={self.award_title[:50]})>"
+
+
+class RelationshipType(PyEnum):
+    """Types of edges in the knowledge graph."""
+    FUNDED_BY_AGENCY = "funded_by_agency"           # SBIR awarded by agency
+    CONTRACTED_BY_AGENCY = "contracted_by_agency"   # Production contract from agency
+    INVESTED_IN_BY = "invested_in_by"               # VC/investor → company
+    SIMILAR_TECHNOLOGY = "similar_technology"        # Embedding cosine similarity
+    COMPETES_WITH = "competes_with"                 # Same tech cluster
+    ALIGNED_TO_POLICY = "aligned_to_policy"         # Policy alignment score
+
+
+class Relationship(Base):
+    """
+    Explicit edges in the knowledge graph.
+
+    Stores typed, directed relationships between entities (or between entities
+    and external concepts like agencies or technology areas). This table makes
+    the implicit relationships in funding_events and contracts first-class,
+    enabling graph traversal and path queries.
+    """
+
+    __tablename__ = "relationships"
+
+    id: Mapped[str] = mapped_column(
+        String(36), primary_key=True, default=generate_uuid
+    )
+    source_entity_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("entities.id"), nullable=False, index=True
+    )
+    relationship_type: Mapped[RelationshipType] = mapped_column(
+        Enum(RelationshipType), nullable=False, index=True
+    )
+    target_entity_id: Mapped[Optional[str]] = mapped_column(
+        String(36), ForeignKey("entities.id"), nullable=True, index=True
+    )
+    # For non-entity targets (agencies, tech areas, policy signals)
+    target_name: Mapped[Optional[str]] = mapped_column(Text, nullable=True, index=True)
+
+    # Edge properties
+    weight: Mapped[Optional[Decimal]] = mapped_column(Numeric(12, 4))  # Strength/value
+    properties: Mapped[Optional[dict]] = mapped_column(JSON)  # Flexible metadata
+    first_observed: Mapped[Optional[date]] = mapped_column(Date)
+    last_observed: Mapped[Optional[date]] = mapped_column(Date)
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, default=func.now(), nullable=False
+    )
+
+    # Relationships
+    source_entity: Mapped["Entity"] = relationship(
+        "Entity", foreign_keys=[source_entity_id]
+    )
+    target_entity: Mapped[Optional["Entity"]] = relationship(
+        "Entity", foreign_keys=[target_entity_id]
+    )
+
+    __table_args__ = (
+        Index("ix_rel_source_type", "source_entity_id", "relationship_type"),
+        Index("ix_rel_target_type", "target_entity_id", "relationship_type"),
+        Index("ix_rel_type_target_name", "relationship_type", "target_name"),
+    )
+
+    def __repr__(self) -> str:
+        target = self.target_entity_id or self.target_name
+        return f"<Relationship({self.source_entity_id} --{self.relationship_type.value}--> {target})>"

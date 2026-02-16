@@ -1,0 +1,127 @@
+<html>
+    <head>
+        <meta charset="utf-8">
+        
+            <script src="lib/bindings/utils.js"></script>
+            <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/vis-network/9.1.2/dist/dist/vis-network.min.css" integrity="sha512-WgxfT5LWjfszlPHXRmBWHkV2eceiWTOBvrKCNbdgDYTHrT2AeLCGbF4sZlZw3UMN3WtL0tGUoIAKsu8mllg/XA==" crossorigin="anonymous" referrerpolicy="no-referrer" />
+            <script src="https://cdnjs.cloudflare.com/ajax/libs/vis-network/9.1.2/dist/vis-network.min.js" integrity="sha512-LnvoEWDFrqGHlHmDD2101OrLcbsfkrzoSpvtSQtxK3RMnRV0eOkhhBN2dXHKRrUU8p2DGRTk35n4O8nWSVe1mQ==" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
+            
+        
+<center>
+<h1>Knowledge Graph: ANDURIL INDUSTRIES, INC.</h1>
+</center>
+
+<!-- <link rel="stylesheet" href="../node_modules/vis/dist/vis.min.css" type="text/css" />
+<script type="text/javascript" src="../node_modules/vis/dist/vis.js"> </script>-->
+        <link
+          href="https://cdn.jsdelivr.net/npm/bootstrap@5.0.0-beta3/dist/css/bootstrap.min.css"
+          rel="stylesheet"
+          integrity="sha384-eOJMYsd53ii+scO/bJGFsiCZc+5NDVN2yr8+0RDqr0Ql0h+rP48ckxlpbzKgwra6"
+          crossorigin="anonymous"
+        />
+        <script
+          src="https://cdn.jsdelivr.net/npm/bootstrap@5.0.0-beta3/dist/js/bootstrap.bundle.min.js"
+          integrity="sha384-JEW9xMcG8R+pH31jmWH6WWP0WintQrMb4s7ZOdauHnUtxwoG2vI5DkLtS3qm9Ekf"
+          crossorigin="anonymous"
+        ></script>
+
+
+        <center>
+          <h1>Knowledge Graph: ANDURIL INDUSTRIES, INC.</h1>
+        </center>
+        <style type="text/css">
+
+             #mynetwork {
+                 width: 100%;
+                 height: 800px;
+                 background-color: #1a1a2e;
+                 border: 1px solid lightgray;
+                 position: relative;
+                 float: left;
+             }
+
+             
+
+             
+
+             
+        </style>
+    </head>
+
+
+    <body>
+        <div class="card" style="width: 100%">
+            
+            
+            <div id="mynetwork" class="card-body"></div>
+        </div>
+
+        
+        
+
+        <script type="text/javascript">
+
+              // initialize global variables.
+              var edges;
+              var nodes;
+              var allNodes;
+              var allEdges;
+              var nodeColors;
+              var originalNodes;
+              var network;
+              var container;
+              var options, data;
+              var filter = {
+                  item : '',
+                  property : '',
+                  value : []
+              };
+
+              
+
+              
+
+              // This method is responsible for drawing the graph, returns the drawn network
+              function drawGraph() {
+                  var container = document.getElementById('mynetwork');
+
+                  
+
+                  // parsing and collecting nodes and edges from the python
+                  nodes = new vis.DataSet([{"color": "#4A90D9", "font": {"color": "white"}, "id": "0c3806de-2dd0-4d0e-89df-73e222116e87", "label": "ANDURIL INDUSTRIES, INC.", "shape": "dot", "size": 10, "title": "ANDURIL INDUSTRIES, INC.\nType: company"}, {"color": "#888888", "font": {"color": "white"}, "id": "Department of the Air Force", "label": "Department of the Air ...", "shape": "dot", "size": 10, "title": "Department of the Air Force\nType: contracted_by_agency"}, {"color": "#888888", "font": {"color": "white"}, "id": "Department of the Army", "label": "Department of the Army", "shape": "dot", "size": 10, "title": "Department of the Army\nType: contracted_by_agency"}, {"color": "#888888", "font": {"color": "white"}, "id": "Department of the Navy", "label": "Department of the Navy", "shape": "dot", "size": 10, "title": "Department of the Navy\nType: contracted_by_agency"}, {"color": "#888888", "font": {"color": "white"}, "id": "U.S. Special Operations Command", "label": "U.S. Special Operation...", "shape": "dot", "size": 10, "title": "U.S. Special Operations Command\nType: contracted_by_agency"}, {"color": "#888888", "font": {"color": "white"}, "id": "Department of Defense", "label": "Department of Defense", "shape": "dot", "size": 10, "title": "Department of Defense\nType: funded_by_agency"}, {"color": "#888888", "font": {"color": "white"}, "id": "Air Force", "label": "Air Force", "shape": "dot", "size": 10, "title": "Air Force\nType: funded_by_agency"}]);
+                  edges = new vis.DataSet([{"color": "#27AE60", "from": "0c3806de-2dd0-4d0e-89df-73e222116e87", "title": "Contracted By Agency", "to": "Department of the Air Force", "width": 5.0}, {"color": "#27AE60", "from": "0c3806de-2dd0-4d0e-89df-73e222116e87", "title": "Contracted By Agency", "to": "Department of the Army", "width": 5.0}, {"color": "#27AE60", "from": "0c3806de-2dd0-4d0e-89df-73e222116e87", "title": "Contracted By Agency", "to": "Department of the Navy", "width": 5.0}, {"color": "#27AE60", "from": "0c3806de-2dd0-4d0e-89df-73e222116e87", "title": "Contracted By Agency", "to": "U.S. Special Operations Command", "width": 5.0}, {"color": "#2ECC71", "from": "0c3806de-2dd0-4d0e-89df-73e222116e87", "title": "Funded By Agency", "to": "Department of Defense", "width": 5.0}, {"color": "#2ECC71", "from": "0c3806de-2dd0-4d0e-89df-73e222116e87", "title": "Funded By Agency", "to": "Air Force", "width": 5.0}]);
+
+                  nodeColors = {};
+                  allNodes = nodes.get({ returnType: "Object" });
+                  for (nodeId in allNodes) {
+                    nodeColors[nodeId] = allNodes[nodeId].color;
+                  }
+                  allEdges = edges.get({ returnType: "Object" });
+                  // adding nodes and edges to the graph
+                  data = {nodes: nodes, edges: edges};
+
+                  var options = {"physics": {"enabled": true, "forceAtlas2Based": {"gravitationalConstant": -50, "centralGravity": 0.005, "springLength": 150, "springConstant": 0.08, "damping": 0.4}, "solver": "forceAtlas2Based", "stabilization": {"iterations": 200}}, "nodes": {"font": {"size": 12, "face": "Inter,sans-serif"}, "borderWidth": 2}, "edges": {"smooth": {"type": "continuous"}, "color": {"inherit": false}}, "interaction": {"hover": true, "tooltipDelay": 200}};
+
+                  
+
+
+                  
+
+                  network = new vis.Network(container, data, options);
+
+                  
+
+                  
+
+                  
+
+
+                  
+
+                  return network;
+
+              }
+              drawGraph();
+        </script>
+    </body>
+</html>

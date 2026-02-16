@@ -1,0 +1,696 @@
+{
+  "config": {
+    "signal_name": "2018 National Defense Strategy \u2014 Great Power Competition",
+    "signal_date": "2018-01-19",
+    "cohort_score": "autonomous_systems",
+    "cohort_threshold": 0.5,
+    "control_threshold": 0.3,
+    "cohort_scores_any": [
+      "autonomous_systems",
+      "electronic_warfare",
+      "jadc2"
+    ],
+    "cohort_sbir_keywords": [],
+    "baseline_start": "2016-01-01",
+    "baseline_end": "2018-01-31",
+    "response_start": "2018-02-01",
+    "response_end": "2021-12-31",
+    "control_entity_type": "STARTUP",
+    "bootstrap_iterations": 200,
+    "response_threshold_multiplier": 1.5
+  },
+  "cohort_size": 1980,
+  "control_size": 1746,
+  "cohort_baseline": {
+    "sbir_p1_count": 1674,
+    "sbir_p2_count": 1118,
+    "sbir_total_value": 1452401733.0,
+    "regd_count": 1,
+    "regd_capital": 1893500.0,
+    "contract_count": 9,
+    "contract_value": 71923790.52,
+    "unique_entities": 680
+  },
+  "cohort_response": {
+    "sbir_p1_count": 4338,
+    "sbir_p2_count": 2585,
+    "sbir_total_value": 3490180419.0,
+    "regd_count": 83,
+    "regd_capital": 2079131063.0,
+    "contract_count": 83,
+    "contract_value": 991993157.2200001,
+    "unique_entities": 1456
+  },
+  "control_baseline": {
+    "sbir_p1_count": 611,
+    "sbir_p2_count": 330,
+    "sbir_total_value": 473159400.0,
+    "regd_count": 1,
+    "regd_capital": 1676612.0,
+    "contract_count": 6,
+    "contract_value": 43881759.42,
+    "unique_entities": 425
+  },
+  "control_response": {
+    "sbir_p1_count": 1688,
+    "sbir_p2_count": 865,
+    "sbir_total_value": 1097345098.0,
+    "regd_count": 81,
+    "regd_capital": 2531228368.0,
+    "contract_count": 22,
+    "contract_value": 241108188.64000002,
+    "unique_entities": 1169
+  },
+  "cohort_quarterly": [
+    {
+      "quarter": "2016-Q1",
+      "sbir_p1_count": 40,
+      "sbir_p2_count": 74,
+      "sbir_total_value": 93397050.0,
+      "regd_count": 0,
+      "regd_capital": 0.0,
+      "contract_count": 1,
+      "contract_value": 4406217.65,
+      "unique_entities": 93
+    },
+    {
+      "quarter": "2016-Q2",
+      "sbir_p1_count": 203,
+      "sbir_p2_count": 108,
+      "sbir_total_value": 147471351.0,
+      "regd_count": 1,
+      "regd_capital": 1893500.0,
+      "contract_count": 0,
+      "contract_value": 0.0,
+      "unique_entities": 194
+    },
+    {
+      "quarter": "2016-Q3",
+      "sbir_p1_count": 379,
+      "sbir_p2_count": 220,
+      "sbir_total_value": 282137663.0,
+      "regd_count": 0,
+      "regd_capital": 0.0,
+      "contract_count": 0,
+      "contract_value": 0.0,
+      "unique_entities": 297
+    },
+    {
+      "quarter": "2016-Q4",
+      "sbir_p1_count": 152,
+      "sbir_p2_count": 76,
+      "sbir_total_value": 112365291.0,
+      "regd_count": 0,
+      "regd_capital": 0.0,
+      "contract_count": 1,
+      "contract_value": 9153930.0,
+      "unique_entities": 142
+    },
+    {
+      "quarter": "2017-Q1",
+      "sbir_p1_count": 84,
+      "sbir_p2_count": 145,
+      "sbir_total_value": 167185503.0,
+      "regd_count": 0,
+      "regd_capital": 0.0,
+      "contract_count": 2,
+      "contract_value": 14116882.34,
+      "unique_entities": 155
+    },
+    {
+      "quarter": "2017-Q2",
+      "sbir_p1_count": 203,
+      "sbir_p2_count": 123,
+      "sbir_total_value": 171427530.0,
+      "regd_count": 0,
+      "regd_capital": 0.0,
+      "contract_count": 2,
+      "contract_value": 14954622.0,
+      "unique_entities": 204
+    },
+    {
+      "quarter": "2017-Q3",
+      "sbir_p1_count": 459,
+      "sbir_p2_count": 252,
+      "sbir_total_value": 325746742.0,
+      "regd_count": 0,
+      "regd_capital": 0.0,
+      "contract_count": 3,
+      "contract_value": 29292138.53,
+      "unique_entities": 326
+    },
+    {
+      "quarter": "2017-Q4",
+      "sbir_p1_count": 129,
+      "sbir_p2_count": 94,
+      "sbir_total_value": 119644051.0,
+      "regd_count": 0,
+      "regd_capital": 0.0,
+      "contract_count": 0,
+      "contract_value": 0.0,
+      "unique_entities": 135
+    },
+    {
+      "quarter": "2018-Q1",
+      "sbir_p1_count": 68,
+      "sbir_p2_count": 117,
+      "sbir_total_value": 133251090.0,
+      "regd_count": 0,
+      "regd_capital": 0.0,
+      "contract_count": 4,
+      "contract_value": 24869456.97,
+      "unique_entities": 125
+    },
+    {
+      "quarter": "2018-Q2",
+      "sbir_p1_count": 268,
+      "sbir_p2_count": 113,
+      "sbir_total_value": 167818079.0,
+      "regd_count": 0,
+      "regd_capital": 0.0,
+      "contract_count": 4,
+      "contract_value": 30479188.06,
+      "unique_entities": 211
+    },
+    {
+      "quarter": "2018-Q3",
+      "sbir_p1_count": 239,
+      "sbir_p2_count": 184,
+      "sbir_total_value": 220675988.0,
+      "regd_count": 1,
+      "regd_capital": 3850494.0,
+      "contract_count": 9,
+      "contract_value": 152831381.15,
+      "unique_entities": 241
+    },
+    {
+      "quarter": "2018-Q4",
+      "sbir_p1_count": 220,
+      "sbir_p2_count": 147,
+      "sbir_total_value": 175639083.0,
+      "regd_count": 1,
+      "regd_capital": 578000.0,
+      "contract_count": 4,
+      "contract_value": 40475642.96,
+      "unique_entities": 235
+    },
+    {
+      "quarter": "2019-Q1",
+      "sbir_p1_count": 254,
+      "sbir_p2_count": 167,
+      "sbir_total_value": 205276178.0,
+      "regd_count": 0,
+      "regd_capital": 0.0,
+      "contract_count": 2,
+      "contract_value": 10665028.55,
+      "unique_entities": 270
+    },
+    {
+      "quarter": "2019-Q2",
+      "sbir_p1_count": 325,
+      "sbir_p2_count": 129,
+      "sbir_total_value": 214952373.0,
+      "regd_count": 1,
+      "regd_capital": 15263317.0,
+      "contract_count": 4,
+      "contract_value": 226340891.1,
+      "unique_entities": 257
+    },
+    {
+      "quarter": "2019-Q3",
+      "sbir_p1_count": 360,
+      "sbir_p2_count": 273,
+      "sbir_total_value": 436997410.0,
+      "regd_count": 2,
+      "regd_capital": 35689921.0,
+      "contract_count": 11,
+      "contract_value": 123129837.28000002,
+      "unique_entities": 388
+    },
+    {
+      "quarter": "2019-Q4",
+      "sbir_p1_count": 428,
+      "sbir_p2_count": 167,
+      "sbir_total_value": 219260327.0,
+      "regd_count": 2,
+      "regd_capital": 4130954.0,
+      "contract_count": 3,
+      "contract_value": 17713206.0,
+      "unique_entities": 374
+    },
+    {
+      "quarter": "2020-Q1",
+      "sbir_p1_count": 320,
+      "sbir_p2_count": 128,
+      "sbir_total_value": 163138873.0,
+      "regd_count": 4,
+      "regd_capital": 32921400.0,
+      "contract_count": 1,
+      "contract_value": 4650000.0,
+      "unique_entities": 320
+    },
+    {
+      "quarter": "2020-Q2",
+      "sbir_p1_count": 355,
+      "sbir_p2_count": 173,
+      "sbir_total_value": 278839497.0,
+      "regd_count": 5,
+      "regd_capital": 99781535.0,
+      "contract_count": 9,
+      "contract_value": 81787625.23,
+      "unique_entities": 322
+    },
+    {
+      "quarter": "2020-Q3",
+      "sbir_p1_count": 152,
+      "sbir_p2_count": 238,
+      "sbir_total_value": 265343321.0,
+      "regd_count": 11,
+      "regd_capital": 85661014.0,
+      "contract_count": 9,
+      "contract_value": 63999374.88999999,
+      "unique_entities": 265
+    },
+    {
+      "quarter": "2020-Q4",
+      "sbir_p1_count": 327,
+      "sbir_p2_count": 80,
+      "sbir_total_value": 137241579.0,
+      "regd_count": 8,
+      "regd_capital": 27455807.0,
+      "contract_count": 4,
+      "contract_value": 33355792.34,
+      "unique_entities": 276
+    },
+    {
+      "quarter": "2021-Q1",
+      "sbir_p1_count": 252,
+      "sbir_p2_count": 194,
+      "sbir_total_value": 233664992.0,
+      "regd_count": 8,
+      "regd_capital": 54191744.0,
+      "contract_count": 3,
+      "contract_value": 22570938.74,
+      "unique_entities": 328
+    },
+    {
+      "quarter": "2021-Q2",
+      "sbir_p1_count": 294,
+      "sbir_p2_count": 149,
+      "sbir_total_value": 201937355.0,
+      "regd_count": 15,
+      "regd_capital": 177232650.0,
+      "contract_count": 6,
+      "contract_value": 84059477.25,
+      "unique_entities": 308
+    },
+    {
+      "quarter": "2021-Q3",
+      "sbir_p1_count": 225,
+      "sbir_p2_count": 246,
+      "sbir_total_value": 319284735.0,
+      "regd_count": 13,
+      "regd_capital": 1333286694.0,
+      "contract_count": 8,
+      "contract_value": 61684102.620000005,
+      "unique_entities": 324
+    },
+    {
+      "quarter": "2021-Q4",
+      "sbir_p1_count": 276,
+      "sbir_p2_count": 106,
+      "sbir_total_value": 149886091.0,
+      "regd_count": 12,
+      "regd_capital": 209087533.0,
+      "contract_count": 2,
+      "contract_value": 13381214.08,
+      "unique_entities": 288
+    }
+  ],
+  "control_quarterly": [
+    {
+      "quarter": "2016-Q1",
+      "sbir_p1_count": 23,
+      "sbir_p2_count": 28,
+      "sbir_total_value": 37721781.0,
+      "regd_count": 0,
+      "regd_capital": 0.0,
+      "contract_count": 1,
+      "contract_value": 19859346.92,
+      "unique_entities": 46
+    },
+    {
+      "quarter": "2016-Q2",
+      "sbir_p1_count": 64,
+      "sbir_p2_count": 29,
+      "sbir_total_value": 42277971.0,
+      "regd_count": 0,
+      "regd_capital": 0.0,
+      "contract_count": 0,
+      "contract_value": 0.0,
+      "unique_entities": 72
+    },
+    {
+      "quarter": "2016-Q3",
+      "sbir_p1_count": 131,
+      "sbir_p2_count": 57,
+      "sbir_total_value": 83950163.0,
+      "regd_count": 0,
+      "regd_capital": 0.0,
+      "contract_count": 1,
+      "contract_value": 7893410.0,
+      "unique_entities": 127
+    },
+    {
+      "quarter": "2016-Q4",
+      "sbir_p1_count": 54,
+      "sbir_p2_count": 16,
+      "sbir_total_value": 22381445.0,
+      "regd_count": 0,
+      "regd_capital": 0.0,
+      "contract_count": 0,
+      "contract_value": 0.0,
+      "unique_entities": 52
+    },
+    {
+      "quarter": "2017-Q1",
+      "sbir_p1_count": 36,
+      "sbir_p2_count": 33,
+      "sbir_total_value": 72449475.0,
+      "regd_count": 1,
+      "regd_capital": 1676612.0,
+      "contract_count": 1,
+      "contract_value": 5093657.0,
+      "unique_entities": 53
+    },
+    {
+      "quarter": "2017-Q2",
+      "sbir_p1_count": 82,
+      "sbir_p2_count": 43,
+      "sbir_total_value": 57434924.0,
+      "regd_count": 0,
+      "regd_capital": 0.0,
+      "contract_count": 0,
+      "contract_value": 0.0,
+      "unique_entities": 92
+    },
+    {
+      "quarter": "2017-Q3",
+      "sbir_p1_count": 165,
+      "sbir_p2_count": 85,
+      "sbir_total_value": 109548796.0,
+      "regd_count": 0,
+      "regd_capital": 0.0,
+      "contract_count": 1,
+      "contract_value": 3446567.0,
+      "unique_entities": 174
+    },
+    {
+      "quarter": "2017-Q4",
+      "sbir_p1_count": 43,
+      "sbir_p2_count": 25,
+      "sbir_total_value": 31914928.0,
+      "regd_count": 0,
+      "regd_capital": 0.0,
+      "contract_count": 2,
+      "contract_value": 7588778.5,
+      "unique_entities": 56
+    },
+    {
+      "quarter": "2018-Q1",
+      "sbir_p1_count": 52,
+      "sbir_p2_count": 34,
+      "sbir_total_value": 40841485.0,
+      "regd_count": 0,
+      "regd_capital": 0.0,
+      "contract_count": 0,
+      "contract_value": 0.0,
+      "unique_entities": 67
+    },
+    {
+      "quarter": "2018-Q2",
+      "sbir_p1_count": 71,
+      "sbir_p2_count": 31,
+      "sbir_total_value": 42341248.0,
+      "regd_count": 0,
+      "regd_capital": 0.0,
+      "contract_count": 0,
+      "contract_value": 0.0,
+      "unique_entities": 77
+    },
+    {
+      "quarter": "2018-Q3",
+      "sbir_p1_count": 93,
+      "sbir_p2_count": 66,
+      "sbir_total_value": 72055572.0,
+      "regd_count": 0,
+      "regd_capital": 0.0,
+      "contract_count": 2,
+      "contract_value": 14938450.43,
+      "unique_entities": 122
+    },
+    {
+      "quarter": "2018-Q4",
+      "sbir_p1_count": 76,
+      "sbir_p2_count": 44,
+      "sbir_total_value": 51850415.0,
+      "regd_count": 2,
+      "regd_capital": 5404770.0,
+      "contract_count": 0,
+      "contract_value": 0.0,
+      "unique_entities": 98
+    },
+    {
+      "quarter": "2019-Q1",
+      "sbir_p1_count": 97,
+      "sbir_p2_count": 45,
+      "sbir_total_value": 52708090.0,
+      "regd_count": 0,
+      "regd_capital": 0.0,
+      "contract_count": 0,
+      "contract_value": 0.0,
+      "unique_entities": 115
+    },
+    {
+      "quarter": "2019-Q2",
+      "sbir_p1_count": 77,
+      "sbir_p2_count": 39,
+      "sbir_total_value": 48717054.0,
+      "regd_count": 4,
+      "regd_capital": 22197821.0,
+      "contract_count": 4,
+      "contract_value": 38787215.400000006,
+      "unique_entities": 95
+    },
+    {
+      "quarter": "2019-Q3",
+      "sbir_p1_count": 187,
+      "sbir_p2_count": 94,
+      "sbir_total_value": 136348476.0,
+      "regd_count": 1,
+      "regd_capital": 41664409.0,
+      "contract_count": 3,
+      "contract_value": 18535967.85,
+      "unique_entities": 238
+    },
+    {
+      "quarter": "2019-Q4",
+      "sbir_p1_count": 199,
+      "sbir_p2_count": 47,
+      "sbir_total_value": 68583580.0,
+      "regd_count": 1,
+      "regd_capital": 1252960.0,
+      "contract_count": 2,
+      "contract_value": 24154650.4,
+      "unique_entities": 210
+    },
+    {
+      "quarter": "2020-Q1",
+      "sbir_p1_count": 152,
+      "sbir_p2_count": 54,
+      "sbir_total_value": 72326479.0,
+      "regd_count": 10,
+      "regd_capital": 108446840.0,
+      "contract_count": 0,
+      "contract_value": 0.0,
+      "unique_entities": 195
+    },
+    {
+      "quarter": "2020-Q2",
+      "sbir_p1_count": 74,
+      "sbir_p2_count": 82,
+      "sbir_total_value": 96508073.0,
+      "regd_count": 7,
+      "regd_capital": 12791092.0,
+      "contract_count": 1,
+      "contract_value": 6680139.0,
+      "unique_entities": 129
+    },
+    {
+      "quarter": "2020-Q3",
+      "sbir_p1_count": 24,
+      "sbir_p2_count": 115,
+      "sbir_total_value": 124661537.0,
+      "regd_count": 4,
+      "regd_capital": 13552965.0,
+      "contract_count": 4,
+      "contract_value": 73636899.21,
+      "unique_entities": 126
+    },
+    {
+      "quarter": "2020-Q4",
+      "sbir_p1_count": 88,
+      "sbir_p2_count": 14,
+      "sbir_total_value": 34072380.0,
+      "regd_count": 9,
+      "regd_capital": 565724189.0,
+      "contract_count": 0,
+      "contract_value": 0.0,
+      "unique_entities": 93
+    },
+    {
+      "quarter": "2021-Q1",
+      "sbir_p1_count": 140,
+      "sbir_p2_count": 66,
+      "sbir_total_value": 73337774.0,
+      "regd_count": 8,
+      "regd_capital": 473730132.0,
+      "contract_count": 1,
+      "contract_value": 6816523.13,
+      "unique_entities": 192
+    },
+    {
+      "quarter": "2021-Q2",
+      "sbir_p1_count": 165,
+      "sbir_p2_count": 45,
+      "sbir_total_value": 67662907.0,
+      "regd_count": 12,
+      "regd_capital": 756717794.0,
+      "contract_count": 1,
+      "contract_value": 5550893.85,
+      "unique_entities": 186
+    },
+    {
+      "quarter": "2021-Q3",
+      "sbir_p1_count": 64,
+      "sbir_p2_count": 73,
+      "sbir_total_value": 87393386.0,
+      "regd_count": 13,
+      "regd_capital": 119353560.0,
+      "contract_count": 2,
+      "contract_value": 41086280.08,
+      "unique_entities": 136
+    },
+    {
+      "quarter": "2021-Q4",
+      "sbir_p1_count": 142,
+      "sbir_p2_count": 30,
+      "sbir_total_value": 43416559.0,
+      "regd_count": 10,
+      "regd_capital": 410391836.0,
+      "contract_count": 2,
+      "contract_value": 10921169.29,
+      "unique_entities": 155
+    }
+  ],
+  "timing": [
+    {
+      "metric_name": "Reg D Filings",
+      "first_response_quarter": "2018-Q3",
+      "quarters_lag": 2,
+      "peak_quarter": "2021-Q2",
+      "peak_value": 15,
+      "baseline_avg": 0.125
+    },
+    {
+      "metric_name": "Reg D Capital",
+      "first_response_quarter": "2018-Q3",
+      "quarters_lag": 2,
+      "peak_quarter": "2021-Q3",
+      "peak_value": 1333286694.0,
+      "baseline_avg": 236687.5
+    },
+    {
+      "metric_name": "SBIR Phase I",
+      "first_response_quarter": "2019-Q2",
+      "quarters_lag": 5,
+      "peak_quarter": "2019-Q4",
+      "peak_value": 428,
+      "baseline_avg": 206.125
+    },
+    {
+      "metric_name": "SBIR Phase II",
+      "first_response_quarter": "2019-Q3",
+      "quarters_lag": 6,
+      "peak_quarter": "2019-Q3",
+      "peak_value": 273,
+      "baseline_avg": 136.5
+    },
+    {
+      "metric_name": "Contracts",
+      "first_response_quarter": "2018-Q2",
+      "quarters_lag": 1,
+      "peak_quarter": "2019-Q3",
+      "peak_value": 11,
+      "baseline_avg": 1.125
+    },
+    {
+      "metric_name": "Contract Value",
+      "first_response_quarter": "2018-Q2",
+      "quarters_lag": 1,
+      "peak_quarter": "2019-Q2",
+      "peak_value": 226340891.1,
+      "baseline_avg": 8990473.815
+    }
+  ],
+  "confidence_intervals": [
+    {
+      "metric_name": "SBIR Phase I",
+      "observed_differential": -17.12862749238866,
+      "ci_lower": -50.6910569105691,
+      "ci_upper": 21.700777202072544,
+      "p_value_approx": 0.855
+    },
+    {
+      "metric_name": "SBIR Phase II",
+      "observed_differential": -30.90475416056813,
+      "ci_lower": -63.293624410428095,
+      "ci_upper": -1.4647226411932195,
+      "p_value_approx": 0.99
+    },
+    {
+      "metric_name": "Reg D Filings",
+      "observed_differential": 200.0,
+      "ci_lower": -1800.0,
+      "ci_upper": 1700.0,
+      "p_value_approx": 0.45555555555555555
+    },
+    {
+      "metric_name": "Reg D Capital",
+      "observed_differential": -41169.22252554713,
+      "ci_lower": -110555.45842958197,
+      "ci_upper": 43624.6285535746,
+      "p_value_approx": 0.8111111111111111
+    },
+    {
+      "metric_name": "Contracts",
+      "observed_differential": 555.5555555555555,
+      "ci_lower": -733.3333333333333,
+      "ci_upper": 1533.3333333333333,
+      "p_value_approx": 0.15873015873015872
+    },
+    {
+      "metric_name": "Contract Value",
+      "observed_differential": 829.7784542337922,
+      "ci_lower": -5011.020740299204,
+      "ci_upper": 2335.1882606444983,
+      "p_value_approx": 0.10052910052910052
+    }
+  ],
+  "warnings": [
+    "LOW DATA: Reg D Filings (cohort baseline) has only 1 observations",
+    "LOW DATA: Reg D Filings (control baseline) has only 1 observations",
+    "LOW DATA: Contracts (cohort baseline) has only 9 observations",
+    "LOW DATA: Contracts (control baseline) has only 6 observations"
+  ]
+}

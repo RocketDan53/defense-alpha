@@ -15,8 +15,11 @@ Two-pass entity matching:
           and create new entities for unmatched defense companies
 
 Usage:
-    # Full backfill from 2020
-    python scrapers/sec_edgar.py --start-date 2020-01-01
+    # Full historical backfill (DERA data available from 2008 Q1)
+    python scrapers/sec_edgar.py --start-date 2008-01-01
+
+    # Backfill pre-2019 for signal-response benchmarks
+    python scrapers/sec_edgar.py --start-date 2012-01-01 --end-date 2019-12-31
 
     # Single quarter test
     python scrapers/sec_edgar.py --start-date 2024-07-01 --end-date 2024-09-30 --limit 50
@@ -335,7 +338,7 @@ class SECEdgarScraper:
         file_map = {}
         for name in z.namelist():
             basename = name.split("/")[-1].upper()
-            if basename in ("ISSUERS.TSV", "OFFERING.TSV", "FORMDSUBMISSION.TSV"):
+            if basename in ("ISSUERS.TSV", "OFFERING.TSV", "FORMDSUBMISSION.TSV", "RELATEDPERSONS.TSV"):
                 file_map[basename] = name
 
         required = {"ISSUERS.TSV", "OFFERING.TSV", "FORMDSUBMISSION.TSV"}
@@ -356,9 +359,26 @@ class SECEdgarScraper:
                         result[acc] = row
                 return result
 
+        def parse_tsv_multi(filename: str) -> dict[str, list[dict]]:
+            """Parse TSV where multiple rows can share an accession number."""
+            with z.open(file_map[filename]) as f:
+                content = f.read().decode("utf-8", errors="replace")
+                reader = csv.DictReader(io.StringIO(content), delimiter="\t")
+                result: dict[str, list[dict]] = {}
+                for row in reader:
+                    acc = row.get("ACCESSIONNUMBER", "").strip()
+                    if acc:
+                        result.setdefault(acc, []).append(row)
+                return result
+
         issuers = parse_tsv("ISSUERS.TSV")
         offerings = parse_tsv("OFFERING.TSV")
         submissions = parse_tsv("FORMDSUBMISSION.TSV")
+
+        # RELATEDPERSONS has multiple rows per filing (directors, officers, promoters)
+        related_persons: dict[str, list[dict]] = {}
+        if "RELATEDPERSONS.TSV" in file_map:
+            related_persons = parse_tsv_multi("RELATEDPERSONS.TSV")
 
         # Merge on accession number
         filings = []
@@ -372,9 +392,24 @@ class SECEdgarScraper:
             submission = submissions.get(acc, {})
             merged.update({f"S_{k}": v for k, v in submission.items() if k != "ACCESSIONNUMBER"})
 
+            # Attach related persons (directors, officers, promoters)
+            persons = related_persons.get(acc, [])
+            if persons:
+                merged["_related_persons"] = [
+                    {
+                        "first_name": p.get("RELATEDPERSONFIRSTNAME", "").strip(),
+                        "last_name": p.get("RELATEDPERSONLASTNAME", "").strip(),
+                        "relationships": p.get("RELATEDPERSONRELATIONSHIPS", "").strip(),
+                    }
+                    for p in persons
+                ]
+
             filings.append(merged)
 
         logger.info(f"  {year}Q{quarter}: {len(filings)} filings parsed")
+        if related_persons:
+            total_persons = sum(len(v) for v in related_persons.values())
+            logger.info(f"  {year}Q{quarter}: {total_persons} related persons parsed")
         return filings
 
     def _match_existing_entity(
@@ -639,8 +674,8 @@ def main():
     parser.add_argument(
         "--start-date",
         type=str,
-        default="2020-01-01",
-        help="Start date YYYY-MM-DD (default: 2020-01-01)",
+        default="2008-01-01",
+        help="Start date YYYY-MM-DD (default: 2008-01-01, DERA data available from 2008 Q1)",
     )
     parser.add_argument(
         "--end-date",

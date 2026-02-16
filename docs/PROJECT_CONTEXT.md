@@ -1,6 +1,6 @@
 # Defense Alpha: Project Context
 
-**Last Updated:** February 10, 2026
+**Last Updated:** February 13, 2026
 **Purpose:** Spin up a new Claude instance with full context on the Defense Alpha project
 
 ---
@@ -11,15 +11,18 @@ A Python-based defense intelligence platform that aggregates government and priv
 
 **Core value proposition:** Systematic signal detection + policy alignment scoring + freshness-weighted composite ranking to identify which SBIR-stage companies are most likely to win production contracts.
 
+**Business model:** Intelligence company, not SaaS platform. Reports are the product, the engine is the back office. Revenue model: curated reports ($2-5K), quarterly intelligence briefs ($10-20K/yr). Defensibility comes from outcome tracking time series (time-locked), human intelligence from client feedback, and analyst reputation.
+
 ---
 
-## Current Data State (Feb 10, 2026)
+## Current Data State (Feb 13, 2026)
 
 ### Entity Counts by Type
 | Type | Count | Description |
 |------|-------|-------------|
 | STARTUP | 9,328 | Emerging defense tech companies (core tracking population) |
 | PRIME | 864 | Large defense contractors |
+| NON_DEFENSE | 553 | No defense footprint (0 SBIRs, 0 contracts, SEC EDGAR only) |
 | RESEARCH | 22 | Universities, FFRDCs, APLs |
 | **Total (unmerged)** | **10,214** | After entity resolution (834 merges from 11,048) |
 
@@ -28,19 +31,55 @@ A Python-based defense intelligence platform that aggregates government and priv
 |-------|-------|-------------|
 | Fully classified + policy scored | 5,481 | Business classification + policy alignment complete |
 | Unclassified | 3,289 | Need business classifier run before policy scoring |
-| Non-defense (excluded) | 558 | No defense footprint (0 SBIRs, 0 contracts, SEC EDGAR only) |
+| Non-defense (excluded) | 553 | No defense footprint (0 SBIRs, 0 contracts, SEC EDGAR only) |
 
 ### Data Volumes
 | Table | Records | Value | Notes |
 |-------|---------|-------|-------|
 | Contracts | 13,340 | $1.16T | USASpending data |
 | Funding Events | 29,523 | - | SBIR + Reg D + VC combined |
-| Signals | 14,502 | - | 14 signal types (active only), tiered freshness decay |
+| Signals | 14,502 | - | 15 signal types (active only), tiered freshness decay |
 | Outcome Events | 114 | - | 23 new_contract + 91 funding_raise |
 | SBIR Embeddings | 27,529 | - | 100% coverage, all-MiniLM-L6-v2 |
 | Policy Alignments | 5,481 | - | All eligible entities scored (requires SBIR + classified business) |
 | Entity Merges | 834 | - | High-confidence auto-merges |
 | Review Queue | 201,328 | - | Pairs flagged for manual review |
+
+---
+
+## Infrastructure Complete
+
+- Pipeline orchestrator (`scripts/run_pipeline.py`)
+- Async business classifier + policy alignment scorer
+- Tiered signal decay (fast/slow/none by signal type)
+- Gone stale detection (24mo threshold)
+- Funding raise detector (91 outcomes, 80% prediction rate, 35mo lead)
+- New contract detector (23 outcomes)
+- `sbir_validated_raise` signal (strict temporal sequencing, 164 companies, $8.48B)
+- RAG engine (`processing/rag_engine.py`) — semantic retrieval → enrichment → Claude reasoning
+- CLI: `python scripts/rag_query.py "<question>"`
+- QA verification script (`scripts/qa_report_data.py`)
+- Report generation pipeline (`scripts/generate_prospect_report.py`, `scripts/generate_pdf_report.py`, `scripts/generate_phase2_pdf.py`)
+
+---
+
+## Key Findings
+
+- **SBIR Phase II predicts private capital raises:** 164 validated companies, $8.48B post-SBIR capital, 8-month median gap
+- 82 companies followed textbook SBIR-first pathway ($3.6B)
+- 80% funding raise prediction rate with 35-month lead time
+- Government SBIR activity predicts private raises ~3 years ahead
+- Signal co-occurrence: `funding_velocity` + `sbir_to_vc_raise` = "smart money in motion" (100 entities)
+- Next wave pipeline: 3,221 Phase II startups with no Reg D filing
+- Raise tier concentration: 16 companies account for 70% of all post-SBIR capital ($5.94B)
+- Space resilience dominates: 43 companies, $3.5B, 41% of cohort capital
+
+---
+
+## Reports Delivered
+
+1. **RF/Comms v2** — 56 companies, delivered to Don
+2. **Phase II Signal** — 164 companies, $8.48B thesis, ready for Konstantine (`reports/phase2_signal_report.pdf`)
 
 ---
 
@@ -93,7 +132,7 @@ python -m processing.policy_alignment --all --async --concurrency 10 --skip-scor
 python -m processing.policy_alignment --names "SHIELD AI" "ANDURIL"
 ```
 
-### 3. Signal Detection ✅ COMPLETE (14 signal types, tiered freshness decay)
+### 3. Signal Detection ✅ COMPLETE (15 signal types, tiered freshness decay)
 **Files:** `processing/signal_detector.py`, `scripts/detect_signals.py`
 
 | Signal Type | Count | Weight | Decay Profile | Description |
@@ -110,7 +149,8 @@ python -m processing.policy_alignment --names "SHIELD AI" "ANDURIL"
 | funding_velocity | 319 | +1.5 | FAST_DECAY | 2+ Reg D filings in 18 months |
 | time_to_contract | 299 | +2.0 | SLOW_DECAY | Quick SBIR to procurement |
 | rapid_contract_growth | 290 | +2.5 | FAST_DECAY | Contract value growth rate |
-| sbir_to_vc_raise | 264 | +2.0 | SLOW_DECAY | VC validates gov't R&D |
+| sbir_to_vc_raise | 264 | +2.0 | SLOW_DECAY | VC validates gov't R&D (loose) |
+| sbir_validated_raise | 164 | +2.5 | SLOW_DECAY | Strict temporal: SBIR precedes/catalyzes raise |
 | outsized_award | 94 | +2.0 | SLOW_DECAY | Unusually large contract |
 
 ### 4. Composite Scoring with Freshness Decay ✅ COMPLETE
@@ -122,7 +162,7 @@ Aggregates signals into a single score per entity with **signal-type-specific fr
 | Profile | Signals | Curve |
 |---------|---------|-------|
 | FAST_DECAY | funding_velocity, rapid_growth, first_dod_contract | 0-6mo: 1.0, 6-12mo: 0.7, 12-24mo: 0.4, 24+: 0.2 |
-| SLOW_DECAY | sbir_phase_2, sbir_to_contract, sbir_to_vc, graduation_speed, time_to_contract, outsized_award | 0-12mo: 1.0, 12-24mo: 0.85, 24-36mo: 0.65, 36+: 0.4 |
+| SLOW_DECAY | sbir_phase_2, sbir_to_contract, sbir_to_vc, sbir_validated_raise, graduation_speed, time_to_contract, outsized_award | 0-12mo: 1.0, 12-24mo: 0.85, 24-36mo: 0.65, 36+: 0.4 |
 | NO_DECAY | customer_concentration, multi_agency, high_priority_tech, sbir_stalled, gone_stale | Always 1.0 |
 
 Computes both `composite_score` (raw) and `freshness_adjusted_score` (decayed). Average freshness discount: **37.8%** across all signals.
@@ -207,19 +247,20 @@ python scripts/find_similar.py --embed  # Regenerate embeddings
 |------|-------|-------------|
 | STARTUP | 9,328 | Core tracking population |
 | PRIME | 864 | Large defense contractors |
-| NON_DEFENSE | 558 | No defense footprint (0 SBIRs, 0 contracts) |
+| NON_DEFENSE | 553 | No defense footprint (0 SBIRs, 0 contracts) |
 | RESEARCH | 22 | Universities, FFRDCs, APLs |
 
 **Reclassification history:**
 - 474 entities reclassified STARTUP -> PRIME (>$50M contracts, excluding AeroVironment, BlueHalo, SpaceX)
 - 8 entities reclassified STARTUP -> RESEARCH (universities/labs)
-- 558 entities reclassified STARTUP -> NON_DEFENSE (SEC EDGAR only, zero defense footprint)
+- 553 entities reclassified STARTUP -> NON_DEFENSE (SEC EDGAR only, zero defense footprint)
 
 ### 9. Report Generation ✅ COMPLETE
-**Files:** `scripts/generate_prospect_report.py`, `scripts/generate_pdf_report.py`
+**Files:** `scripts/generate_prospect_report.py`, `scripts/generate_pdf_report.py`, `scripts/generate_phase2_pdf.py`
 
-Generates branded PDF/Markdown reports for specific verticals:
+Generates branded PDF/Markdown reports:
 - RF & Communications Report v2 (55 companies)
+- Phase II Signal report (164 companies, $8.48B thesis)
 - Execution-weighted combined scoring
 - Top 10 detailed profiles with policy analysis
 
@@ -242,6 +283,22 @@ python scripts/rag_query.py "companies building counter-drone RF systems" --raw 
 python scripts/rag_query.py "jam-resistant tactical radios for Pacific ops"        # Full pipeline
 python scripts/rag_query.py "mesh networking" --filter-business software --min-score 2.0
 python scripts/rag_query.py "autonomous underwater vehicles" --report              # JSON for reports
+```
+
+### 11. QA Verification ✅ COMPLETE
+**File:** `scripts/qa_report_data.py`
+
+Cross-references stored signal evidence against raw funding_events data:
+- 4 verification sections per entity: SBIR, Reg D, Signal recomputation, Timeline
+- Reg D deduplication detection (same amount within 30 days)
+- Independent signal recomputation from raw data
+- 178/178 checks passed across top 20 cohort companies
+
+**Usage:**
+```bash
+python scripts/qa_report_data.py                    # Top 20 by raise amount
+python scripts/qa_report_data.py --top 10
+python scripts/qa_report_data.py --entity "SI2 TECHNOLOGIES"
 ```
 
 ---
@@ -272,7 +329,7 @@ combined = 0.55 x norm_composite + 0.30 x policy_tailwind + 0.15 x contract_tier
 **Rationale:** 18 months was too aggressive for defense timelines (SBIR Phase II takes 12-18 months alone). 24 months captures genuinely inactive companies while allowing for normal procurement lag.
 
 ### 4. Non-Defense Entity Classification
-**Decision:** Created `NON_DEFENSE` entity type for 558 entities with zero SBIRs, zero contracts, only SEC EDGAR Reg D filings.
+**Decision:** Created `NON_DEFENSE` entity type for 553 entities with zero SBIRs, zero contracts, only SEC EDGAR Reg D filings.
 
 **Rationale:** SEC EDGAR scraper captured commercial companies (Genesys Cloud, BitMine, Compass real estate). These polluted analysis — Genesys alone inflated funding raise outcomes by $3B. NON_DEFENSE excludes them from classifier, scorer, and signal pipelines.
 
@@ -296,6 +353,11 @@ combined = 0.55 x norm_composite + 0.30 x policy_tailwind + 0.15 x contract_tier
 
 **Rationale:** Sequential: ~4 entities/min. Async with 10 concurrency: ~40 entities/min. 10x improvement.
 
+### 9. Reg D Deduplication
+**Decision:** Filings with identical (entity_id, event_date, amount) treated as amended filings and collapsed to one.
+
+**Rationale:** Found 25 duplicate groups totaling $1.67B in inflated capital. Biggest offender: Genesys Cloud ($1.5B duplicated). Applied consistently across all three detector locations (sbir_to_vc_raise, sbir_validated_raise, detect_funding_raises).
+
 ---
 
 ## Architecture
@@ -314,6 +376,7 @@ defense-alpha/
 │   ├── business_classifier.py  # LLM-based core business classification (sync + async)
 │   ├── policy_alignment.py     # NDS priority scoring (sync + async)
 │   ├── signal_detector.py      # All signal detection logic (15 types)
+│   ├── rag_engine.py           # RAG: retrieval → enrichment → Claude reasoning
 │   └── technology_tagger.py    # Keyword-based tech categorization
 ├── scripts/
 │   ├── run_pipeline.py         # Full pipeline orchestrator (--full-refresh / --process-only)
@@ -322,13 +385,19 @@ defense-alpha/
 │   ├── run_entity_resolution.py
 │   ├── find_similar.py         # Semantic search over SBIR embeddings
 │   ├── track_outcomes.py       # Outcome tracking for signal validation
+│   ├── rag_query.py            # RAG CLI (--raw, --report, full pipeline)
+│   ├── qa_report_data.py       # QA verification for signal data
 │   ├── tag_sbir_entities.py
 │   ├── tech_clusters.py        # K-means clustering of SBIR abstracts
 │   ├── generate_prospect_report.py  # Markdown report generator
-│   └── generate_pdf_report.py       # PDF report generator
+│   ├── generate_pdf_report.py       # PDF report generator (prospect reports)
+│   ├── generate_phase2_pdf.py       # PDF report generator (Phase II Signal)
+│   └── policy_signal_poc.py         # Policy signal-response PoC (Space Force)
 ├── reports/
-│   ├── rf_comms_v2.md          # Latest RF report (55 companies)
-│   └── rf_comms_v2.pdf
+│   ├── rf_comms_v2.md          # RF report (55 companies)
+│   ├── rf_comms_v2.pdf
+│   ├── phase2_signal_report.md # Phase II Signal thesis report (164 companies)
+│   └── phase2_signal_report.pdf
 ├── config/
 │   ├── policy_priorities.yaml  # NDS priority definitions and weights
 │   └── settings.py             # App configuration
@@ -337,8 +406,7 @@ defense-alpha/
 │   ├── review_queue.csv        # Entity resolution review queue (201K pairs)
 │   └── pipeline_runs/          # Pipeline execution logs
 ├── docs/
-│   └── PROJECT_CONTEXT.md      # This file
-├── PROJECT_CONTEXT.md          # Root copy for easy access
+│   └── project_context.md      # This file
 └── requirements.txt
 ```
 
@@ -403,14 +471,15 @@ I'm working on defense-alpha at ~/projects/defense-alpha
 cd ~/projects/defense-alpha && source venv/bin/activate
 
 Defense intelligence platform with:
-- 10,214 entities (9,328 startups, 864 primes, 22 research)
+- 10,214 entities (9,328 startups, 864 primes, 553 non_defense, 22 research)
 - 5,481 fully classified + policy scored
 - 3,289 unclassified (need business classifier)
 - 13,340 contracts ($1.16T), 29,523 funding events
-- 14,502 signals (14 types, tiered freshness decay)
+- 14,502 signals (15 types, tiered freshness decay)
 - 114 outcome events (23 contracts, 91 funding raises — 80% prediction rate, 35mo lead)
 - 27,529 SBIR embeddings (full coverage)
-- Key finding: SBIR phase transitions predict private raises ~3 years ahead
+- Key finding: SBIR Phase II predicts private raises — 164 companies, $8.48B, 8-month median gap
+- Next wave pipeline: 3,221 Phase II startups with no Reg D
 
 Current priorities: see Next Tasks section below.
 
@@ -419,15 +488,22 @@ Show me current DB stats to confirm state, then let's continue.
 
 ---
 
-## Infrastructure Complete
+## Policy Signal-Response Benchmark (Proof of Concept)
+- Script: `scripts/policy_signal_poc.py`
+- Test case: Space Force establishment (Dec 2019)
+- Finding: Reg D activity responded within Q+1, contracts lagged to Q+3. SBIR showed no quarterly-level response (budget-driven, not policy-signal-responsive).
+- Limitation: Pre-2019 Reg D baseline too thin (7 filings) for statistical significance.
+- Validation: Control group methodology works. Differential between space and non-space cohorts isolates space-specific effect.
+- Blocker: Need historical private capital data (backfill EDGAR to 2008 or integrate Crunchbase) before running additional signal-response pairs.
+- Next: Backfill historical Reg D data, then test 2018 NDS great power competition pivot and 2022 post-Ukraine drone investment surge.
 
-- ✅ Pipeline orchestrator (`scripts/run_pipeline.py`)
-- ✅ Async classifiers (business + policy, `--async --concurrency 10`)
-- ✅ Tiered signal decay (FAST_DECAY / SLOW_DECAY / NO_DECAY)
-- ✅ Gone stale detection (24-month threshold)
-- ✅ Funding raise + contract outcome detectors
-- ✅ Full SBIR embeddings (27,529, all-MiniLM-L6-v2)
-- ✅ RAG engine (`processing/rag_engine.py` + `scripts/rag_query.py`)
+## Product Vision (Validated)
+Defense Alpha → "Noetica for defense capital formation"
+- Take government/DoD signals (policy, budget, SBIR, OTA, solicitations)
+- Map to private market responses (VC raises, company formation, contract wins)
+- Build historical benchmarks from signal-response pairs
+- Apply benchmarks to current signals for quantitative predictions
+- Defensible: time-locked dataset, cross-domain linkage nobody else has
 
 ---
 
@@ -461,16 +537,42 @@ Show me current DB stats to confirm state, then let's continue.
 - Run business classifier: `python -m processing.business_classifier --all --async --concurrency 10 --skip-classified`
 - Then policy alignment: `python -m processing.policy_alignment --all --skip-scored --async --concurrency 10`
 
-### 6. Generate Defense Software Report (second vertical)
-- Follow RF & Communications report pattern (`reports/rf_comms_v2.md`)
-- Filter for `core_business = 'software'` (1,912 entities)
-- Top companies by combined score with software focus
+### 6. Connect RAG → Report Generator (single command: query → PDF)
+- Currently two-step: RAG query produces structured data, then separately generate PDF
+- Goal: `python scripts/rag_query.py "counter-drone RF" --pdf reports/counter_drone.pdf`
+
+### 7. Build Feedback Capture Mechanism
+- Capture report recipient feedback (Don, Konstantine)
+- Store as structured data tied to entity IDs
+- Feed back into signal weighting over time
+
+### 8. Fix Reg D Filing Count Edge Case
+- NULL-date Reg D filings cause off-by-one in evidence `regd_filing_count`
+- Seen in Apex Technology (10 DB vs 9 evidence) and Alare Technologies (12 vs 11)
+- Amounts are correct — just the count field
 
 ### Medium Priority
 - **Refresh data pulls** — USASpending (30 days), SBIR (current year), SEC EDGAR (90 days)
 - **Generate updated RF report** — Refresh with latest signal/policy data
 - **Review entity resolution queue** — 201,328 pairs in `data/review_queue.csv`
 - **Remaining outcome stubs** — sbir_stall, acquisition, recompete_loss (lower priority)
+- **Generate Defense Software Report** — Filter for `core_business = 'software'` (1,912 entities)
+
+---
+
+## Technical Notes
+
+- Run scrapers sequentially (SQLite can't handle concurrent writes)
+- Business classifier now has `--async --concurrency --skip-classified` flags
+- Signal weights: `sbir_to_contract` (3.0), `sbir_validated_raise` (2.5), `rapid_growth` (2.5), `sbir_to_vc` (2.0) are highest positive
+- Tiered decay: FAST (momentum signals), SLOW (milestones), NONE (structural)
+- Gone stale threshold: 24 months with no activity
+- Reg D amounts are cumulative filing totals, not individual round sizes
+- SI2 Technologies $1.1B single filing likely PE/growth equity, not typical VC
+- 201K entity resolution review pairs — needs better blocking strategy at scale
+- DB column names: `canonical_name` (not `name`), `headquarters_location` (not `location`), `confidence_score` (not `confidence`), `evidence` (not `raw_data`) on signals table
+- Enum values are UPPERCASE in the database: `STARTUP`, `ACTIVE`, `SBIR_PHASE_2`, etc.
+- SBIR dates are mixed format: MM/DD/YYYY (older) vs YYYY-MM-DD (2023+); use `json_extract(raw_data, '$.Proposal Award Date')` for award dates
 
 ---
 
@@ -488,7 +590,11 @@ Show me current DB stats to confirm state, then let's continue.
 | Semantic search | `scripts/find_similar.py` |
 | RAG engine | `processing/rag_engine.py` |
 | RAG CLI | `scripts/rag_query.py` |
-| Report generation | `scripts/generate_prospect_report.py` |
+| Report generation (prospects) | `scripts/generate_prospect_report.py` |
+| Report generation (PDF) | `scripts/generate_pdf_report.py` |
+| Report generation (Phase II) | `scripts/generate_phase2_pdf.py` |
+| QA verification | `scripts/qa_report_data.py` |
+| Policy signal-response PoC | `scripts/policy_signal_poc.py` |
 | Policy config | `config/policy_priorities.yaml` |
 | DB models | `processing/models.py` |
 
@@ -496,9 +602,15 @@ Show me current DB stats to confirm state, then let's continue.
 
 ## Strategic Context
 
-**Moat is in data infrastructure** (pipelines, connectors, entity resolution) — not the LLM layer. Classification is plumbing. **Outcome tracking is defensible** — backtest which signals predict success; this is the unique dataset. **Workflow integration creates stickiness** — alerts, watchlists, embedded in user's daily process.
+**Business model:** Intelligence company, not SaaS platform. Reports are the product, engine is the back office. Defensibility: outcome tracking time series (time-locked), human intelligence from client feedback, analyst reputation. Revenue model: curated reports ($2-5K), quarterly intelligence briefs ($10-20K/yr).
 
-**Key validation:** Funding raise detector shows 80% true prediction rate with 35-month median lead time. SBIR phase transitions predict private capital raises ~3 years ahead — this is the core defensible insight.
+**Architecture philosophy:**
+- Local models: MiniLM-L6-v2 for embeddings/similarity (free, fast)
+- API LLM: Claude for classification, scoring, RAG reasoning (~$55 for full universe)
+- Future: predictive model on outcome tracking data (6-12 months)
+- RAG connects embeddings (finding) to Claude (reasoning) — not yet connected to report generator as single command
+
+**Key validation:** Funding raise detector shows 80% true prediction rate with 35-month median lead time. SBIR phase transitions predict private capital raises ~3 years ahead — this is the core defensible insight. Phase II Signal report ($8.48B across 164 companies) is the proof point.
 
 Don (first client) feedback: "All new SBIR companies to me!" He suggested targeting VCs + Primes as customers ("matchmaker" positioning).
 
