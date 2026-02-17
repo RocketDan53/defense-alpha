@@ -1,6 +1,6 @@
 # Defense Alpha: Project Context
 
-**Last Updated:** February 13, 2026
+**Last Updated:** February 16, 2026
 **Purpose:** Spin up a new Claude instance with full context on the Defense Alpha project
 
 ---
@@ -15,7 +15,7 @@ A Python-based defense intelligence platform that aggregates government and priv
 
 ---
 
-## Current Data State (Feb 13, 2026)
+## Current Data State (Feb 16, 2026)
 
 ### Entity Counts by Type
 | Type | Count | Description |
@@ -369,13 +369,15 @@ defense-alpha/
 │   ├── sbir.py                 # SBIR/STTR awards (bulk CSV + API)
 │   └── sec_edgar.py            # SEC Form D private funding (Reg D filings)
 ├── processing/
-│   ├── models.py               # SQLAlchemy models (Entity, Contract, Signal, OutcomeEvent, etc.)
+│   ├── models.py               # SQLAlchemy models (Entity, Contract, Signal, Relationship, etc.)
 │   ├── database.py             # DB connection and session management
 │   ├── entity_resolver.py      # Deduplication with fuzzy matching
 │   ├── entity_resolution/      # Advanced resolution (resolver.py, matchers.py)
 │   ├── business_classifier.py  # LLM-based core business classification (sync + async)
 │   ├── policy_alignment.py     # NDS priority scoring (sync + async)
 │   ├── signal_detector.py      # All signal detection logic (15 types)
+│   ├── signal_response.py      # Signal-response benchmark framework (parameterized, bootstrap CIs)
+│   ├── knowledge_graph.py      # Graph materialization + path queries
 │   ├── rag_engine.py           # RAG: retrieval → enrichment → Claude reasoning
 │   └── technology_tagger.py    # Keyword-based tech categorization
 ├── scripts/
@@ -388,16 +390,28 @@ defense-alpha/
 │   ├── rag_query.py            # RAG CLI (--raw, --report, full pipeline)
 │   ├── qa_report_data.py       # QA verification for signal data
 │   ├── tag_sbir_entities.py
-│   ├── tech_clusters.py        # K-means clustering of SBIR abstracts
+│   ├── tech_clusters.py        # K-means clustering of SBIR abstracts (--save to JSON)
+│   ├── run_benchmarks.py       # Signal-response benchmark runner (3 predefined configs)
+│   ├── build_graph.py          # Knowledge graph materialization + queries
+│   ├── visualize_graph.py      # NetworkX/Pyvis interactive graph visualization
+│   ├── extract_investors.py    # Investor extraction from Reg D related persons
+│   ├── materialize_agencies.py # Agency relationship profiles (dollar volumes, counts)
 │   ├── generate_prospect_report.py  # Markdown report generator
 │   ├── generate_pdf_report.py       # PDF report generator (prospect reports)
 │   ├── generate_phase2_pdf.py       # PDF report generator (Phase II Signal)
-│   └── policy_signal_poc.py         # Policy signal-response PoC (Space Force)
+│   └── policy_signal_poc.py         # Policy signal-response PoC (Space Force, original)
+├── results/
+│   ├── benchmark_space_force.json       # Signal-response benchmark results
+│   ├── benchmark_nds_2018.json
+│   └── benchmark_ukraine_drones_2022.json
 ├── reports/
 │   ├── rf_comms_v2.md          # RF report (55 companies)
 │   ├── rf_comms_v2.pdf
 │   ├── phase2_signal_report.md # Phase II Signal thesis report (164 companies)
-│   └── phase2_signal_report.pdf
+│   ├── phase2_signal_report.pdf
+│   ├── graph_space_resilience.html     # Interactive ecosystem visualizations
+│   ├── graph_autonomous_systems.html
+│   └── graph_anduril.html
 ├── config/
 │   ├── policy_priorities.yaml  # NDS priority definitions and weights
 │   └── settings.py             # App configuration
@@ -461,6 +475,14 @@ id, funding_event_id (FK), entity_id (FK)
 award_title, embedding (BLOB, 384-dim float32)
 ```
 
+### relationships
+```sql
+id, source_entity_id (FK), relationship_type (funded_by_agency/contracted_by_agency/invested_in_by/similar_technology/competes_with/aligned_to_policy)
+target_entity_id (FK, nullable), target_name (for non-entity targets like agencies/policy areas)
+weight (edge strength/dollar value), properties (JSON)
+first_observed, last_observed
+```
+
 ---
 
 ## How to Start a Session
@@ -480,25 +502,50 @@ Defense intelligence platform with:
 - 27,529 SBIR embeddings (full coverage)
 - Key finding: SBIR Phase II predicts private raises — 164 companies, $8.48B, 8-month median gap
 - Next wave pipeline: 3,221 Phase II startups with no Reg D
+- Knowledge graph: 39,604 relationships materialized (agency, contract, policy edges)
+- Signal-response benchmarks: 3 calibrated pairs (Space Force, NDS 2018, Ukraine Drones)
+- Interactive visualizations: reports/graph_space_resilience.html, etc.
 
-Current priorities: see Next Tasks section below.
+Current priorities: see Next Priority section below.
 
 Show me current DB stats to confirm state, then let's continue.
 ```
 
 ---
 
-## Policy Signal-Response Benchmark (Proof of Concept)
-- Script: `scripts/policy_signal_poc.py`
-- Test case: Space Force establishment (Dec 2019)
-- Finding: Reg D activity responded within Q+1, contracts lagged to Q+3. SBIR showed no quarterly-level response (budget-driven, not policy-signal-responsive).
-- Limitation: Pre-2019 Reg D baseline too thin (7 filings) for statistical significance.
-- Validation: Control group methodology works. Differential between space and non-space cohorts isolates space-specific effect.
-- Blocker: Need historical private capital data (backfill EDGAR to 2008 or integrate Crunchbase) before running additional signal-response pairs.
-- Next: Backfill historical Reg D data, then test 2018 NDS great power competition pivot and 2022 post-Ukraine drone investment surge.
+## Knowledge Graph
+- 39,604 relationships (16,656 FUNDED_BY_AGENCY, 5,811 CONTRACTED_BY_AGENCY, 17,137 ALIGNED_TO_POLICY)
+- Relationship model in `processing/models.py` (`Relationship`, `RelationshipType`)
+- Materialization: `scripts/build_graph.py` (`--materialize`, `--stats`, `--path`, `--ecosystem`)
+- Visualization: `scripts/visualize_graph.py` (Pyvis interactive HTML)
+- Supports path queries between entities (`--path "Anduril" --policy space_resilience`)
+- Ecosystem graphs show companies, agencies, and policy connections in one view
+- Graph engine: `processing/knowledge_graph.py`
+
+## Signal-Response Benchmarks
+- Framework: `processing/signal_response.py` (parameterized configs, bootstrap CIs, auto-interpretation)
+- 3 calibrated pairs:
+
+| Signal | Reg D Capital Differential | Reg D Timing | Contract Differential | Contract Timing |
+|--------|---------------------------|-------------|----------------------|-----------------|
+| **Space Force (Dec 2019)** | +871% vs control | Q+1 | -54.9% | Q+3 |
+| **NDS 2018 (Jan 2018)** | -41,169% (general VC boom) | Q+2 | +829.8% | Q+1 |
+| **Ukraine Drones (Feb 2022)** | +51.3% | Q+1 | +23.0% | Q+2 |
+
+- Key pattern: Reg D responds Q+1 to Q+2, contracts respond Q+1 to Q+3
+- Limitation: Pre-2019 Reg D baseline too thin (7 filings). SEC EDGAR scraper now supports backfill to 2008.
+- CLI: `scripts/run_benchmarks.py` (`--benchmark space_force`, `--bootstrap 1000`, `--output results/`)
+- Results stored as JSON in `results/benchmark_*.json`
+- Original PoC preserved: `scripts/policy_signal_poc.py`
+
+## Investor Data
+- `scripts/extract_investors.py` parses RELATEDPERSONS from SEC EDGAR DERA data
+- SEC EDGAR scraper updated to download `RELATEDPERSONS.TSV` (directors, officers, promoters)
+- Enables investor pattern analysis (who invests in which signal profiles)
+- Related persons stored in `raw_data._related_persons` on Reg D funding_events
 
 ## Product Vision (Validated)
-Defense Alpha → "Noetica for defense capital formation"
+Defense Alpha → knowledge graph of defense capital formation
 - Take government/DoD signals (policy, budget, SBIR, OTA, solicitations)
 - Map to private market responses (VC raises, company formation, contract wins)
 - Build historical benchmarks from signal-response pairs
@@ -507,49 +554,53 @@ Defense Alpha → "Noetica for defense capital formation"
 
 ---
 
-## Next Session Priorities
+## Next Priority
 
-### 1. Data Validation Layer
+### 1. Backfill Reg D to 2012 for stronger baselines
+- SEC EDGAR scraper now supports `--start-date 2008-01-01` (DERA data available from 2008 Q1)
+- Run: `python scrapers/sec_edgar.py --start-date 2012-01-01 --end-date 2019-12-31`
+- This unblocks statistically valid baselines for all signal-response benchmarks
+- Current pre-2019 Reg D baseline: only 7 filings (too thin for confidence intervals)
+
+### 2. Build comparables engine for deal intelligence queries
+- Given a target company, find comparables via SBIR embedding similarity + agency overlap + policy alignment
+- Extend knowledge graph with SIMILAR_TECHNOLOGY and COMPETES_WITH edges
+- Cross-reference overlapping agencies, NAICS codes, and policy priorities
+- Output: "Companies like X" with signal profiles, funding history, agency relationships
+
+### 3. OTA data integration (USASpending filter expansion)
+- Add Other Transaction Authority (OTA) awards as a funding event type
+- OTAs are a key signal for non-traditional defense companies
+- USASpending API supports OTA filtering
+
+### 4. Test manual comparables analysis on Scout Space
+- Use the knowledge graph + benchmarks to build a full investment memo
+- End-to-end validation: signals → benchmarks → comparables → recommendation
+
+### Next Session Priorities (carried over)
+
+### 5. Data Validation Layer
 - Build automated data quality checks that run before/after pipeline
 - Validate: no orphaned contracts, no duplicate source_keys, entity type distribution sanity
-- Check for entity merges that broke signal/outcome links
-- Detect anomalies: entities with $1B+ contracts but entity_type=STARTUP
-- Could be a new step in `run_pipeline.py` or standalone `scripts/validate_data.py`
 
-### 2. Policy Headwind Signal
-- New negative signal: entity works primarily in areas with declining budget
-- Inverse of `high_priority_technology` — flags companies in shrinking areas (e.g., hypersonics -43%)
-- Use policy_alignment scores: if top priorities are all low-weight/declining, fire signal
-- Weight: -1.0 to -1.5, NO_DECAY profile
+### 6. Policy Headwind Signal
+- New negative signal for companies in declining budget areas (e.g., hypersonics -43%)
 - Add to `signal_detector.py` alongside existing negative signals
 
-### 3. Remaining Outcome Detectors (3 priority stubs)
-1. **sbir_advance** — Phase progression I->II->III. Compare funding_events before/after signal.
-2. **new_agency** — Contract with new DoD branch. Check contracting_agency vs historical.
-3. **company_inactive** — No new contracts/funding/SBIRs in 12+ months.
+### 7. Remaining Outcome Detectors (3 priority stubs)
+1. **sbir_advance** — Phase progression I->II->III
+2. **new_agency** — Contract with new DoD branch
+3. **company_inactive** — No activity in 12+ months
 
-### 4. Competitive Mapping
-- Given a target company, find competitors via SBIR embedding similarity
-- Extend RAG engine or build standalone `scripts/competitive_map.py`
-- Cross-reference overlapping agencies, NAICS codes, and policy priorities
+### 8. Classify Remaining 3,289 Entities
+- `python -m processing.business_classifier --all --async --concurrency 10 --skip-classified`
+- `python -m processing.policy_alignment --all --skip-scored --async --concurrency 10`
 
-### 5. Classify Remaining 3,289 Entities
-- Run business classifier: `python -m processing.business_classifier --all --async --concurrency 10 --skip-classified`
-- Then policy alignment: `python -m processing.policy_alignment --all --skip-scored --async --concurrency 10`
-
-### 6. Connect RAG → Report Generator (single command: query → PDF)
-- Currently two-step: RAG query produces structured data, then separately generate PDF
+### 9. Connect RAG → Report Generator (single command: query → PDF)
 - Goal: `python scripts/rag_query.py "counter-drone RF" --pdf reports/counter_drone.pdf`
 
-### 7. Build Feedback Capture Mechanism
-- Capture report recipient feedback (Don, Konstantine)
-- Store as structured data tied to entity IDs
-- Feed back into signal weighting over time
-
-### 8. Fix Reg D Filing Count Edge Case
+### 10. Fix Reg D Filing Count Edge Case
 - NULL-date Reg D filings cause off-by-one in evidence `regd_filing_count`
-- Seen in Apex Technology (10 DB vs 9 evidence) and Alare Technologies (12 vs 11)
-- Amounts are correct — just the count field
 
 ### Medium Priority
 - **Refresh data pulls** — USASpending (30 days), SBIR (current year), SEC EDGAR (90 days)
@@ -557,6 +608,7 @@ Defense Alpha → "Noetica for defense capital formation"
 - **Review entity resolution queue** — 201,328 pairs in `data/review_queue.csv`
 - **Remaining outcome stubs** — sbir_stall, acquisition, recompete_loss (lower priority)
 - **Generate Defense Software Report** — Filter for `core_business = 'software'` (1,912 entities)
+- **Build Feedback Capture Mechanism** — Capture report recipient feedback, feed into signal weighting
 
 ---
 
@@ -595,6 +647,14 @@ Defense Alpha → "Noetica for defense capital formation"
 | Report generation (Phase II) | `scripts/generate_phase2_pdf.py` |
 | QA verification | `scripts/qa_report_data.py` |
 | Policy signal-response PoC | `scripts/policy_signal_poc.py` |
+| Signal-response framework | `processing/signal_response.py` |
+| Benchmark runner | `scripts/run_benchmarks.py` |
+| Knowledge graph engine | `processing/knowledge_graph.py` |
+| Graph builder/query CLI | `scripts/build_graph.py` |
+| Graph visualization | `scripts/visualize_graph.py` |
+| Investor extraction | `scripts/extract_investors.py` |
+| Agency materialization | `scripts/materialize_agencies.py` |
+| Technology clusters | `scripts/tech_clusters.py` |
 | Policy config | `config/policy_priorities.yaml` |
 | DB models | `processing/models.py` |
 
