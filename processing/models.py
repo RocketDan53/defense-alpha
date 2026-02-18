@@ -237,6 +237,11 @@ class Contract(Base):
     contract_type: Mapped[Optional[str]] = mapped_column(String(50))
     raw_data: Mapped[Optional[dict]] = mapped_column(JSON)
 
+    # Procurement type: "standard" (FAR) or "ota" (Other Transaction Authority)
+    procurement_type: Mapped[Optional[str]] = mapped_column(
+        String(20), default="standard", index=True
+    )
+
     created_at: Mapped[datetime] = mapped_column(
         DateTime, default=func.now(), nullable=False
     )
@@ -352,6 +357,12 @@ class OutcomeEvent(Base):
 
     def __repr__(self) -> str:
         return f"<OutcomeEvent(id={self.id}, type={self.outcome_type.value}, value={self.outcome_value})>"
+
+
+class ProcurementType(PyEnum):
+    """How the contract was procured."""
+    STANDARD = "standard"  # FAR-based procurement (traditional contracts)
+    OTA = "ota"            # Other Transaction Authority (10 USC 4022)
 
 
 class MergeReason(PyEnum):
