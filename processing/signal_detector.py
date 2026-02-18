@@ -1,5 +1,5 @@
 """
-Signal Detection Engine for Defense Alpha Intelligence Platform.
+Signal Detection Engine for Aperture Signals Intelligence Platform.
 
 Detects actionable intelligence signals from entity activity patterns:
 - SBIR phase transitions (Phase I -> II -> III)

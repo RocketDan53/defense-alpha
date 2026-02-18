@@ -1,5 +1,5 @@
 """
-Defense Alpha Intelligence Engine - Database Models
+Aperture Signals Intelligence Engine - Database Models
 
 SQLAlchemy ORM models for the intelligence platform.
 """

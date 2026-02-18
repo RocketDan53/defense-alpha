@@ -1,5 +1,5 @@
 """
-Defense Alpha Intelligence Engine - Configuration
+Aperture Signals Intelligence Engine - Configuration
 
 Loads settings from environment variables with sensible defaults.
 """

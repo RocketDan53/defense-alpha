@@ -1,10 +1,10 @@
-# Defense Alpha Intelligence Engine
+# Aperture Signals Intelligence Engine
 
 A defense-focused intelligence platform that creates proprietary datasets by integrating DoD procurement data, startup funding flows, and operational military context.
 
 ## Overview
 
-Defense Alpha aggregates and analyzes data from multiple sources to identify:
+Aperture Signals aggregates and analyzes data from multiple sources to identify:
 - Emerging defense technology startups
 - Funding patterns (VC rounds, SBIR/STTR awards)
 - DoD contract awards and procurement trends

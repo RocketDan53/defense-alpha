@@ -1,11 +1,11 @@
-# Defense Alpha: Project Context
+# Aperture Signals: Project Context
 
 **Last Updated:** February 16, 2026
-**Purpose:** Spin up a new Claude instance with full context on the Defense Alpha project
+**Purpose:** Spin up a new Claude instance with full context on the Aperture Signals project
 
 ---
 
-## What Is Defense Alpha
+## What Is Aperture Signals
 
 A Python-based defense intelligence platform that aggregates government and private market data to identify investment signals in defense technology companies. Built to surface emerging companies with real traction for defense investors, sales consultants, and BD teams.
 
@@ -488,7 +488,7 @@ first_observed, last_observed
 ## How to Start a Session
 
 ```
-I'm working on defense-alpha at ~/projects/defense-alpha
+I'm working on Aperture Signals at ~/projects/defense-alpha
 
 cd ~/projects/defense-alpha && source venv/bin/activate
 
@@ -545,7 +545,7 @@ Show me current DB stats to confirm state, then let's continue.
 - Related persons stored in `raw_data._related_persons` on Reg D funding_events
 
 ## Product Vision (Validated)
-Defense Alpha → knowledge graph of defense capital formation
+Aperture Signals → knowledge graph of defense capital formation
 - Take government/DoD signals (policy, budget, SBIR, OTA, solicitations)
 - Map to private market responses (VC raises, company formation, contract wins)
 - Build historical benchmarks from signal-response pairs
@@ -676,4 +676,4 @@ Don (first client) feedback: "All new SBIR companies to me!" He suggested target
 
 ---
 
-*This document should give any Claude instance enough context to continue work on Defense Alpha.*
+*This document should give any Claude instance enough context to continue work on Aperture Signals.*

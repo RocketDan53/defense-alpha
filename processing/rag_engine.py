@@ -1,5 +1,5 @@
 """
-RAG (Retrieval-Augmented Generation) engine for Defense Alpha.
+RAG (Retrieval-Augmented Generation) engine for Aperture Signals.
 
 Combines semantic search over SBIR embeddings with entity intelligence
 enrichment and Claude-powered reasoning to answer natural language

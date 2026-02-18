@@ -338,7 +338,7 @@ def generate_analyst_note(prospects, queries, title):
                                  for s in p["positive_signals"])]
 
     # ── Paragraph 1: Market Observation ──
-    p1 = (f"Defense Alpha identified {count} emerging companies with active programs "
+    p1 = (f"Aperture Signals identified {count} emerging companies with active programs "
           f"in {vertical}, backed by {total_sbir_awards} SBIR awards totaling "
           f"{format_currency(total_sbir_funding)}")
     if vc_companies:
@@ -488,7 +488,7 @@ def generate_markdown(prospects: list, title: str, queries: list[str],
     today = date.today().strftime("%B %d, %Y")
 
     lines = []
-    lines.append(f"# Defense Alpha: {title}")
+    lines.append(f"# Aperture Signals: {title}")
     lines.append(f"")
     lines.append(f"**Generated:** {today}")
     lines.append(f"**Prospects:** {len(prospects)} companies")
@@ -622,7 +622,7 @@ def generate_markdown(prospects: list, title: str, queries: list[str],
     lines.append(f"- 1,979 SEC Form D filings")
     lines.append(f"- Proprietary composite scoring across 13 signal types")
     lines.append(f"")
-    lines.append(f"*Defense Alpha Intelligence Engine v1.0 | {today}*")
+    lines.append(f"*Aperture Signals Intelligence Engine v1.0 | {today}*")
 
     return "\n".join(lines)
 

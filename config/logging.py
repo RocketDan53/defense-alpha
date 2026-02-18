@@ -1,5 +1,5 @@
 """
-Logging configuration for Defense Alpha Intelligence Engine.
+Logging configuration for Aperture Signals Intelligence Engine.
 """
 
 import logging
@@ -13,7 +13,7 @@ LOG_DIR = Path(__file__).parent.parent / "logs"
 LOG_DIR.mkdir(exist_ok=True)
 
 
-def setup_logging(name: str = "defense_alpha") -> logging.Logger:
+def setup_logging(name: str = "aperture") -> logging.Logger:
     """
     Set up logging configuration.
 

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Defense Alpha Pipeline Orchestrator
+Aperture Signals Pipeline Orchestrator
 
 Single-command runner for the full processing chain.
 
@@ -194,7 +194,7 @@ def run_pipeline(args):
     pipeline_start = time.time()
 
     print_header(
-        f"DEFENSE ALPHA PIPELINE — {mode.upper().replace('_', ' ')} MODE"
+        f"APERTURE SIGNALS PIPELINE — {mode.upper().replace('_', ' ')} MODE"
         + (" (DRY RUN)" if args.dry_run else "")
     )
     print(f"  Started:  {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
@@ -204,7 +204,7 @@ def run_pipeline(args):
         print(f"  Prompt:   {'disabled (auto-continue on failure)' if args.no_prompt else 'enabled'}")
 
     with open(log_path, "w") as log_file:
-        log_file.write(f"Defense Alpha Pipeline Run\n")
+        log_file.write(f"Aperture Signals Pipeline Run\n")
         log_file.write(f"Mode: {mode}\n")
         log_file.write(f"Started: {datetime.now().isoformat()}\n")
         log_file.write(f"Dry run: {args.dry_run}\n\n")
@@ -375,7 +375,7 @@ def run_pipeline(args):
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Defense Alpha Pipeline Orchestrator",
+        description="Aperture Signals Pipeline Orchestrator",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:

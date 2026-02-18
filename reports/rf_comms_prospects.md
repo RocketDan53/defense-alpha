@@ -1,4 +1,4 @@
-# Defense Alpha: RF & Communications Emerging Company Report
+# Aperture Signals: RF & Communications Emerging Company Report
 
 **Generated:** February 05, 2026
 **Prospects:** 10 companies
@@ -8,7 +8,7 @@
 
 ## Analyst's Note
 
-Defense Alpha identified 10 emerging companies with active programs in RF & Communications, backed by 26 SBIR awards totaling $27.3M and $60.0M in disclosed private capital across 5 companies. Sub-segment activity clusters around beamforming & directed RF (3), radar & sensing (2), mesh networking (2). 5 of 10 sit at Seed / Early stage (4 at Series A, 1 at Series B+) — a fragmented, early-stage vertical with consolidation opportunity.
+Aperture Signals identified 10 emerging companies with active programs in RF & Communications, backed by 26 SBIR awards totaling $27.3M and $60.0M in disclosed private capital across 5 companies. Sub-segment activity clusters around beamforming & directed RF (3), radar & sensing (2), mesh networking (2). 5 of 10 sit at Seed / Early stage (4 at Series A, 1 at Series B+) — a fragmented, early-stage vertical with consolidation opportunity.
 
 Momentum is concentrated in companies pairing SBIR validation with private capital: ZENITH AEROSPACE INC, AscendArc, Inc., MATRIXSPACE, INC. A transition gap is visible: 6 hold Phase II awards while only 1 has won production contracts, suggesting the prototype-to-procurement valley of death remains a bottleneck. Watch ZENITH AEROSPACE INC, AscendArc, Inc., NANTRAK TACTICAL LLC for near-term movement based on acceleration signals.
 
@@ -318,4 +318,4 @@ Engage at the SBIR Phase II inflection point, where technology is government-val
 - 1,979 SEC Form D filings
 - Proprietary composite scoring across 13 signal types
 
-*Defense Alpha Intelligence Engine v1.0 | February 05, 2026*
+*Aperture Signals Intelligence Engine v1.0 | February 05, 2026*

@@ -205,7 +205,12 @@ class USASpendingScraper:
                     "end_date": end_date.isoformat(),
                 }
             ],
-            "award_type_codes": ["A", "B", "C", "D"],  # Contract types
+            # A=BPA Call, B=Purchase Order, C=Delivery Order, D=Definitive Contract
+            # Note: IDV codes (IDV_A..IDV_E) are accepted but return 0 results —
+            # this endpoint only returns prime contracts. Task orders placed under
+            # IDVs already appear as type C/A. OTAs (10 USC 4022) are not in
+            # USASpending's type taxonomy at all; capturing those requires FPDS.
+            "award_type_codes": ["A", "B", "C", "D"],
             "award_amounts": [
                 {
                     "lower_bound": self.min_contract_value,

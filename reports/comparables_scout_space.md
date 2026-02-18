@@ -219,4 +219,4 @@ Ranked by profile similarity (SBIR depth, Phase II count, space resilience score
 
 ---
 
-*Analysis generated from Defense Alpha knowledge graph. 43 comparables drawn from 10,214 resolved defense technology entities across SBIR.gov, SEC EDGAR, and USASpending.gov.*
+*Analysis generated from Aperture Signals knowledge graph. 43 comparables drawn from 10,214 resolved defense technology entities across SBIR.gov, SEC EDGAR, and USASpending.gov.*
