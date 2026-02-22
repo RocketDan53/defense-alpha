@@ -121,8 +121,8 @@ class SamGovOTAScraper:
 
     BASE_URL = "https://api.sam.gov/contract-awards/v1/search"
 
-    # SAM.gov rate limits are tight — 1 request/second baseline
-    MIN_REQUEST_INTERVAL = 1.0
+    # SAM.gov rate limits are tight — 5 seconds between requests
+    MIN_REQUEST_INTERVAL = 5.0
 
     def __init__(
         self,
@@ -160,9 +160,17 @@ class SamGovOTAScraper:
             time.sleep(self.MIN_REQUEST_INTERVAL - elapsed)
         self.last_request_time = time.time()
 
+    # (connect timeout, read timeout) in seconds
+    REQUEST_TIMEOUT = (10, 30)
+    MAX_RETRIES_PER_PAGE = 3
+    RETRY_WAIT_SECONDS = 30
+
     def _make_request(self, params: dict) -> Optional[dict]:
         """
-        Make GET request to SAM.gov API with rate limiting and error handling.
+        Make GET request to SAM.gov API with rate limiting and retry-on-failure.
+
+        Retries up to MAX_RETRIES_PER_PAGE times on timeout or connection error,
+        waiting RETRY_WAIT_SECONDS between attempts.
 
         Args:
             params: Query parameters (api_key added automatically)
@@ -170,38 +178,48 @@ class SamGovOTAScraper:
         Returns:
             Response JSON or None on failure
         """
-        self._rate_limit()
-        self.stats.api_requests += 1
-
         params["api_key"] = self.api_key
 
-        try:
-            response = self.session.get(
-                self.BASE_URL,
-                params=params,
-                timeout=60,
-            )
+        for attempt in range(1, self.MAX_RETRIES_PER_PAGE + 1):
+            self._rate_limit()
+            self.stats.api_requests += 1
 
-            if response.status_code == 429:
-                logger.warning("Rate limited by SAM.gov. Waiting 60 seconds...")
-                time.sleep(60)
-                # Retry once after waiting
+            try:
                 response = self.session.get(
                     self.BASE_URL,
                     params=params,
-                    timeout=60,
+                    timeout=self.REQUEST_TIMEOUT,
                 )
 
-            response.raise_for_status()
-            return response.json()
+                if response.status_code == 429:
+                    logger.warning("Rate limited by SAM.gov. Waiting 60 seconds...")
+                    time.sleep(60)
+                    continue
 
-        except requests.exceptions.RequestException as e:
-            logger.error(f"SAM.gov API request failed: {e}")
-            if hasattr(e, 'response') and e.response is not None:
-                logger.error(f"Response status: {e.response.status_code}")
-                logger.error(f"Response body: {e.response.text[:500]}")
-            self.stats.errors += 1
-            return None
+                response.raise_for_status()
+                return response.json()
+
+            except (requests.exceptions.Timeout, requests.exceptions.ConnectionError) as e:
+                logger.warning(
+                    f"Request failed (attempt {attempt}/{self.MAX_RETRIES_PER_PAGE}): {e}"
+                )
+                if attempt < self.MAX_RETRIES_PER_PAGE:
+                    logger.info(f"Waiting {self.RETRY_WAIT_SECONDS}s before retry...")
+                    time.sleep(self.RETRY_WAIT_SECONDS)
+                else:
+                    logger.error(f"All {self.MAX_RETRIES_PER_PAGE} attempts failed, skipping page")
+                    self.stats.errors += 1
+                    return None
+
+            except requests.exceptions.RequestException as e:
+                logger.error(f"SAM.gov API request failed: {e}")
+                if hasattr(e, 'response') and e.response is not None:
+                    logger.error(f"Response status: {e.response.status_code}")
+                    logger.error(f"Response body: {e.response.text[:500]}")
+                self.stats.errors += 1
+                return None
+
+        return None
 
     def _build_params(
         self,
@@ -326,12 +344,18 @@ class SamGovOTAScraper:
         }
 
     def _parse_date(self, date_str: Optional[str]) -> Optional[date]:
-        """Parse date string from SAM.gov API (various formats)."""
+        """Parse date string from SAM.gov API (various formats, including ISO 8601)."""
         if not date_str:
             return None
+        # Strip trailing Z (UTC indicator) and timezone offsets — we only need the date
+        cleaned = date_str.strip().replace("Z", "")
+        try:
+            return datetime.fromisoformat(cleaned).date()
+        except (ValueError, TypeError):
+            pass
         for fmt in ["%Y-%m-%d", "%Y-%m-%dT%H:%M:%S", "%m/%d/%Y", "%Y-%m-%d %H:%M:%S"]:
             try:
-                return datetime.strptime(date_str[:max(10, len(date_str))], fmt).date()
+                return datetime.strptime(cleaned[:max(10, len(cleaned))], fmt).date()
             except ValueError:
                 continue
         logger.warning(f"Could not parse date: {date_str}")
@@ -457,6 +481,24 @@ class SamGovOTAScraper:
             self.db.rollback()
             return None
 
+    def _get_resume_offset(self, ot_type: str) -> int:
+        """
+        Check the DB for contracts of this OT type and estimate the page offset
+        to resume from. Each page is 100 records.
+        """
+        existing_count = (
+            self.db.query(Contract)
+            .filter(
+                Contract.procurement_type == ProcurementType.OTA.value,
+                Contract.contract_type == ot_type,
+            )
+            .count()
+        )
+        offset = existing_count // 100
+        if offset > 0:
+            logger.info(f"Resuming {ot_type}: {existing_count} contracts already in DB, starting at page {offset}")
+        return offset
+
     def _scrape_ot_type(
         self,
         ot_type: str,
@@ -464,6 +506,7 @@ class SamGovOTAScraper:
         end_date: date,
         limit: Optional[int] = None,
         dry_run: bool = False,
+        resume: bool = False,
     ) -> int:
         """
         Scrape all records for a single OT type.
@@ -474,13 +517,14 @@ class SamGovOTAScraper:
             end_date: Range end
             limit: Max records to fetch (None=all)
             dry_run: If True, only count records, don't store
+            resume: If True, skip pages already ingested
 
         Returns:
             Number of records fetched for this OT type
         """
         logger.info(f"--- Scraping: {ot_type} ---")
 
-        offset = 0
+        offset = self._get_resume_offset(ot_type) if resume else 0
         page_size = 100
         type_fetched = 0
         pending_commits = 0
@@ -503,8 +547,9 @@ class SamGovOTAScraper:
             response = self._make_request(params)
 
             if not response:
-                logger.error(f"Failed to fetch page {offset} for {ot_type}, stopping this type")
-                break
+                logger.warning(f"Failed to fetch page {offset} for {ot_type}, skipping to next page")
+                offset += 1
+                continue
 
             # Log response structure on first page for debugging
             if offset == 0:
@@ -556,17 +601,18 @@ class SamGovOTAScraper:
                         type_fetched += 1
                         pending_commits += 1
 
-                        if type_fetched % 50 == 0:
-                            logger.info(f"Progress ({ot_type}): {type_fetched} contracts processed")
-
-                    # Batch commit
-                    if pending_commits >= self.batch_size:
+                    # Checkpoint: every 100 records, log progress and commit
+                    if pending_commits >= 100:
                         try:
                             self.db.commit()
+                            logger.info(
+                                f"Checkpoint ({ot_type}): {type_fetched} contracts processed, "
+                                f"{self.stats.contracts_inserted} inserted, "
+                                f"{self.stats.entities_created} new entities — committed"
+                            )
                             pending_commits = 0
-                            logger.debug(f"Committed batch at {type_fetched} contracts")
                         except Exception as e:
-                            logger.error(f"Batch commit failed: {e}")
+                            logger.error(f"Checkpoint commit failed: {e}")
                             self.db.rollback()
                             self.stats.errors += 1
 
@@ -608,6 +654,7 @@ class SamGovOTAScraper:
         ot_types: Optional[list[str]] = None,
         limit: Optional[int] = None,
         dry_run: bool = False,
+        resume: bool = False,
     ) -> ScraperStats:
         """
         Main scraping function. Queries each OT type and unions results.
@@ -618,6 +665,7 @@ class SamGovOTAScraper:
             ot_types: OT types to query (default: all three)
             limit: Max records per OT type (None=all)
             dry_run: If True, count records only — don't store
+            resume: If True, skip pages already ingested per OT type
 
         Returns:
             ScraperStats with results
@@ -637,6 +685,7 @@ class SamGovOTAScraper:
         logger.info(f"OT types: {ot_types}")
         logger.info(f"Limit per type: {limit or 'None'}")
         logger.info(f"Dry run: {dry_run}")
+        logger.info(f"Resume: {resume}")
         logger.info("=" * 60)
 
         total = 0
@@ -647,6 +696,7 @@ class SamGovOTAScraper:
                 end_date=end_date,
                 limit=limit,
                 dry_run=dry_run,
+                resume=resume,
             )
             total += count
 
@@ -790,6 +840,11 @@ def main():
         action="store_true",
         help="Count records only, don't store in database",
     )
+    parser.add_argument(
+        "--resume",
+        action="store_true",
+        help="Resume from where a previous run left off (skips already-ingested pages)",
+    )
 
     args = parser.parse_args()
 
@@ -816,6 +871,7 @@ def main():
             ot_types=ot_types,
             limit=args.limit,
             dry_run=args.dry_run,
+            resume=args.resume,
         )
 
         # Post-scrape analytics

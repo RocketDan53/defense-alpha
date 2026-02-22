@@ -1,6 +1,6 @@
 # Aperture Signals: Project Context
 
-**Last Updated:** February 16, 2026
+**Last Updated:** February 19, 2026
 **Purpose:** Spin up a new Claude instance with full context on the Aperture Signals project
 
 ---
@@ -60,6 +60,8 @@ A Python-based defense intelligence platform that aggregates government and priv
 - CLI: `python scripts/rag_query.py "<question>"`
 - QA verification script (`scripts/qa_report_data.py`)
 - Report generation pipeline (`scripts/generate_prospect_report.py`, `scripts/generate_pdf_report.py`, `scripts/generate_phase2_pdf.py`)
+- SAM.gov OTA scraper (`scrapers/sam_gov_ota.py`) — built and validated, pending DB restore
+- Comparables engine — validated on Scout Space (43 comps, 5x raise multiplier finding)
 
 ---
 
@@ -79,7 +81,8 @@ A Python-based defense intelligence platform that aggregates government and priv
 ## Reports Delivered
 
 1. **RF/Comms v2** — 56 companies, delivered to Don
-2. **Phase II Signal** — 164 companies, $8.48B thesis, ready for Konstantine (`reports/phase2_signal_report.pdf`)
+2. **Phase II Signal** — 164 companies, $8.48B thesis, shipped (`reports/phase2_signal_report.pdf`). Ready to send to Konstantine (teaser first, let him pull the report). QA: 178/178 checks passed, zero discrepancies.
+3. **Scout Space Comparables** — 43 comparable companies, contract traction = 5x raise multiplier (`reports/comparables_scout_space.md`). Raise expectation: $7-12M base, $15-25M upside with contract traction.
 
 ---
 
@@ -301,6 +304,45 @@ python scripts/qa_report_data.py --top 10
 python scripts/qa_report_data.py --entity "SI2 TECHNOLOGIES"
 ```
 
+### 12. SAM.gov OTA Scraper ✅ BUILT (not yet run against DB)
+**File:** `scrapers/sam_gov_ota.py`
+
+Scrapes Other Transaction Authority contracts from SAM.gov Contract Awards API:
+- Queries three OT types: ORDER, AGREEMENT, IDV
+- Entity resolution via `EntityResolver` for vendor matching
+- `procurement_type` column on Contract model (`standard` vs `ota`)
+- `ProcurementType` enum in `processing/models.py`
+- Rate limit: 3-second delay for free tier API key (`MIN_REQUEST_INTERVAL = 3.0`)
+- Dry run validated: 14,565+ OTA records for FY2024 (4,988 orders + 9,577 agreements)
+- SAM_GOV_API_KEY stored in `.env` at project root
+- Post-scrape analytics: FY breakdown, top vendors, contracting offices
+- USASpending confirmed blind to OTAs (no type code exists)
+- FPDS Atom Feed decommissioned Feb 24, 2026 — SAM.gov is the only durable path
+
+**OTA data context:**
+- OTAs grew from $950M (FY2015) to $18B+ (FY2024) — 18% of DoD R&D spending
+- Top issuers: ACC-NJ, DARPA, DIU, AFWERX, Army Apps Lab
+- 57% of OTA dollars flow through consortia intermediaries (SOSSEC, ATI, NCMS) — need second-level resolution to find actual performers
+- GAO found $40B+ in OTAs not reported to USASpending
+- This is Aperture's biggest data gap — Anduril, Shield AI, Skydio entered through OTAs and are invisible in current data
+
+**Usage:**
+```bash
+python -m scrapers.sam_gov_ota --start-date 2023-10-01           # FY2024+
+python -m scrapers.sam_gov_ota --start-date 2015-10-01           # Full history
+python -m scrapers.sam_gov_ota --ot-type "OTHER TRANSACTION ORDER" --limit 100
+python -m scrapers.sam_gov_ota --dry-run                         # Count only
+```
+
+### 13. Comparables Engine ✅ VALIDATED
+**File:** `reports/comparables_scout_space.md`
+
+Deal intelligence via SBIR embedding similarity + agency overlap + policy alignment:
+- Scout Space test case: 43 comparable companies identified
+- Key finding: contract traction = 5x raise multiplier (19% of comps had production contracts, raised 5x median)
+- Raise expectation: $7-12M base, $15-25M upside with contract traction
+- End-to-end validation: signals → benchmarks → comparables → recommendation
+
 ---
 
 ## Key Decisions Made and Why
@@ -367,7 +409,8 @@ defense-alpha/
 ├── scrapers/
 │   ├── usaspending.py          # DoD contracts from USASpending API
 │   ├── sbir.py                 # SBIR/STTR awards (bulk CSV + API)
-│   └── sec_edgar.py            # SEC Form D private funding (Reg D filings)
+│   ├── sec_edgar.py            # SEC Form D private funding (Reg D filings)
+│   └── sam_gov_ota.py          # OTA contracts from SAM.gov Contract Awards API
 ├── processing/
 │   ├── models.py               # SQLAlchemy models (Entity, Contract, Signal, Relationship, etc.)
 │   ├── database.py             # DB connection and session management
@@ -409,6 +452,7 @@ defense-alpha/
 │   ├── rf_comms_v2.pdf
 │   ├── phase2_signal_report.md # Phase II Signal thesis report (164 companies)
 │   ├── phase2_signal_report.pdf
+│   ├── comparables_scout_space.md  # Scout Space comparables (43 companies)
 │   ├── graph_space_resilience.html     # Interactive ecosystem visualizations
 │   ├── graph_autonomous_systems.html
 │   └── graph_anduril.html
@@ -444,7 +488,8 @@ merged_into_id
 ```sql
 id, entity_id (FK), contract_number, contract_value, award_date
 contracting_agency, naics_code, psc_code
-period_of_performance_start/end, place_of_performance, raw_data (JSON)
+period_of_performance_start/end, place_of_performance, contract_type, raw_data (JSON)
+procurement_type (standard/ota, indexed)
 ```
 
 ### funding_events
@@ -533,6 +578,7 @@ Show me current DB stats to confirm state, then let's continue.
 | **Ukraine Drones (Feb 2022)** | +51.3% | Q+1 | +23.0% | Q+2 |
 
 - Key pattern: Reg D responds Q+1 to Q+2, contracts respond Q+1 to Q+3
+- SBIR is budget-driven, not policy-signal-responsive
 - Limitation: Pre-2019 Reg D baseline too thin (7 filings). SEC EDGAR scraper now supports backfill to 2008.
 - CLI: `scripts/run_benchmarks.py` (`--benchmark space_force`, `--bootstrap 1000`, `--output results/`)
 - Results stored as JSON in `results/benchmark_*.json`
@@ -544,7 +590,12 @@ Show me current DB stats to confirm state, then let's continue.
 - Enables investor pattern analysis (who invests in which signal profiles)
 - Related persons stored in `raw_data._related_persons` on Reg D funding_events
 
-## Product Vision (Validated)
+## Product Vision (Crystallized)
+
+**Model: "Noetica for defense capital formation"**
+- Noetica: unstructured deal docs → structured term intelligence → benchmarks → acquired by Thomson Reuters
+- Aperture: public gov/capital data → structured signals → benchmarks → defense investment intelligence
+
 Aperture Signals → knowledge graph of defense capital formation
 - Take government/DoD signals (policy, budget, SBIR, OTA, solicitations)
 - Map to private market responses (VC raises, company formation, contract wins)
@@ -552,63 +603,69 @@ Aperture Signals → knowledge graph of defense capital formation
 - Apply benchmarks to current signals for quantitative predictions
 - Defensible: time-locked dataset, cross-domain linkage nobody else has
 
+**Three product surfaces validated:**
+1. Thesis reports (Phase II Signal)
+2. Comparables/deal intelligence (Scout Space)
+3. Sector intelligence (RF/Comms v2)
+- Future: signal-response benchmarks as queryable dataset
+
+**Elevator Pitch:**
+"Aperture maps government defense spending to private capital markets. We track every SBIR award, defense contract, and SEC filing, link them to the same companies, and detect signals that predict where private money is going to flow. Think of it as the intelligence layer between the Pentagon's budget and the investors deploying capital around it."
+
+One-liner: "Aperture tells defense investors where the government's money is going before the market figures it out."
+
 ---
 
 ## Next Priority
 
-### 1. Backfill Reg D to 2012 for stronger baselines
-- SEC EDGAR scraper now supports `--start-date 2008-01-01` (DERA data available from 2008 Q1)
-- Run: `python scrapers/sec_edgar.py --start-date 2012-01-01 --end-date 2019-12-31`
-- This unblocks statistically valid baselines for all signal-response benchmarks
+### 1. Restore defense_alpha.db from backup/old machine
+- DB is 0 bytes on new machine — contains all entities, contracts, funding events, signals, embeddings, relationships
+- Must restore before any analysis/scraping can resume
+- Without DB: scrapers will work into empty tables but no entity resolution context
+
+### 2. Recreate .env with all API keys
+- ANTHROPIC_API_KEY (needed for classifier, policy scorer, RAG)
+- SAM_GOV_API_KEY ✅ (already set: SAM-9baea9ce-...)
+- Any others used in config/settings.py
+
+### 3. Run SAM.gov OTA scraper (FY2024 first, then backfill)
+- `python -m scrapers.sam_gov_ota --start-date 2023-10-01`
+- Then backfill: `python -m scrapers.sam_gov_ota --start-date 2015-10-01 --end-date 2023-09-30`
+- Rate limit set to 3 seconds; may need 5 seconds for full backfill
+
+### 4. Entity resolution on OTA data — quantify blind spot
+- How many OTA vendors are already in the entity universe?
+- How many are new (invisible in current data)?
+
+### 5. Backfill SEC EDGAR Reg D to 2012 for stronger baselines
+- `python scrapers/sec_edgar.py --start-date 2012-01-01 --end-date 2019-12-31`
+- Unblocks statistically valid baselines for all signal-response benchmarks
 - Current pre-2019 Reg D baseline: only 7 filings (too thin for confidence intervals)
 
-### 2. Build comparables engine for deal intelligence queries
-- Given a target company, find comparables via SBIR embedding similarity + agency overlap + policy alignment
-- Extend knowledge graph with SIMILAR_TECHNOLOGY and COMPETES_WITH edges
-- Cross-reference overlapping agencies, NAICS codes, and policy priorities
-- Output: "Companies like X" with signal profiles, funding history, agency relationships
+### 6. Run comparables on 2-3 more companies to confirm methodology generalizes
+- Scout Space validated the approach; need to test on different sectors/stages
 
-### 3. OTA data integration (USASpending filter expansion)
-- Add Other Transaction Authority (OTA) awards as a funding event type
-- OTAs are a key signal for non-traditional defense companies
-- USASpending API supports OTA filtering
+### 7. Package Phase II Signal report + Scout Space comparables as sample deliverables
 
-### 4. Test manual comparables analysis on Scout Space
-- Use the knowledge graph + benchmarks to build a full investment memo
-- End-to-end validation: signals → benchmarks → comparables → recommendation
+### 8. Build feedback capture mechanism for report recipients
 
-### Next Session Priorities (carried over)
-
-### 5. Data Validation Layer
-- Build automated data quality checks that run before/after pipeline
+### 9. Data validation layer
+- Automated quality checks before/after pipeline
 - Validate: no orphaned contracts, no duplicate source_keys, entity type distribution sanity
 
-### 6. Policy Headwind Signal
-- New negative signal for companies in declining budget areas (e.g., hypersonics -43%)
-- Add to `signal_detector.py` alongside existing negative signals
-
-### 7. Remaining Outcome Detectors (3 priority stubs)
-1. **sbir_advance** — Phase progression I->II->III
-2. **new_agency** — Contract with new DoD branch
-3. **company_inactive** — No activity in 12+ months
-
-### 8. Classify Remaining 3,289 Entities
-- `python -m processing.business_classifier --all --async --concurrency 10 --skip-classified`
-- `python -m processing.policy_alignment --all --skip-scored --async --concurrency 10`
-
-### 9. Connect RAG → Report Generator (single command: query → PDF)
+### 10. Connect RAG → report generator (single command query → PDF)
 - Goal: `python scripts/rag_query.py "counter-drone RF" --pdf reports/counter_drone.pdf`
 
-### 10. Fix Reg D Filing Count Edge Case
-- NULL-date Reg D filings cause off-by-one in evidence `regd_filing_count`
-
 ### Medium Priority
+- **Policy headwind signal** — Negative signal for companies in declining budget areas (e.g., hypersonics -43%)
+- **Remaining outcome detectors** — sbir_advance, new_agency, company_inactive (3 stubs)
+- **Classify remaining 3,289 entities** — Business classifier + policy alignment
+- **Fix Reg D filing count edge case** — NULL-date filings cause off-by-one
 - **Refresh data pulls** — USASpending (30 days), SBIR (current year), SEC EDGAR (90 days)
 - **Generate updated RF report** — Refresh with latest signal/policy data
 - **Review entity resolution queue** — 201,328 pairs in `data/review_queue.csv`
-- **Remaining outcome stubs** — sbir_stall, acquisition, recompete_loss (lower priority)
 - **Generate Defense Software Report** — Filter for `core_business = 'software'` (1,912 entities)
-- **Build Feedback Capture Mechanism** — Capture report recipient feedback, feed into signal weighting
+- **Remaining outcome stubs** — sbir_stall, acquisition, recompete_loss
 
 ---
 
@@ -625,6 +682,17 @@ Aperture Signals → knowledge graph of defense capital formation
 - DB column names: `canonical_name` (not `name`), `headquarters_location` (not `location`), `confidence_score` (not `confidence`), `evidence` (not `raw_data`) on signals table
 - Enum values are UPPERCASE in the database: `STARTUP`, `ACTIVE`, `SBIR_PHASE_2`, etc.
 - SBIR dates are mixed format: MM/DD/YYYY (older) vs YYYY-MM-DD (2023+); use `json_extract(raw_data, '$.Proposal Award Date')` for award dates
+- SAM.gov OTA scraper rate limit: 3-second delay for free tier; may need 5 seconds for long backfills
+- OTA contracts stored with `procurement_type='ota'` vs `'standard'` for FAR contracts
+- 57% of OTA dollars flow through consortia — need second-level resolution for actual performers
+
+### New Machine Setup (Feb 19, 2026)
+- Code synced via git, venv recreated at `~/projects/defense-alpha/venv`
+- Python: `/opt/homebrew/bin/python3` (Python 3.14)
+- **BLOCKING:** `defense_alpha.db` is 0 bytes — must restore from old machine/backup
+- `.env` created with `SAM_GOV_API_KEY`; still needs `ANTHROPIC_API_KEY`
+- Domain: aperturesignals.com (live)
+- Database filename remains `defense_alpha.db` (intentional, not rebranded)
 
 ---
 
@@ -655,6 +723,7 @@ Aperture Signals → knowledge graph of defense capital formation
 | Investor extraction | `scripts/extract_investors.py` |
 | Agency materialization | `scripts/materialize_agencies.py` |
 | Technology clusters | `scripts/tech_clusters.py` |
+| OTA scraper | `scrapers/sam_gov_ota.py` |
 | Policy config | `config/policy_priorities.yaml` |
 | DB models | `processing/models.py` |
 
@@ -673,6 +742,8 @@ Aperture Signals → knowledge graph of defense capital formation
 **Key validation:** Funding raise detector shows 80% true prediction rate with 35-month median lead time. SBIR phase transitions predict private capital raises ~3 years ahead — this is the core defensible insight. Phase II Signal report ($8.48B across 164 companies) is the proof point.
 
 Don (first client) feedback: "All new SBIR companies to me!" He suggested targeting VCs + Primes as customers ("matchmaker" positioning).
+
+**Rebrand:** Defense Alpha → Aperture Signals across 17 files. Domain: aperturesignals.com (live). Database filename remains `defense_alpha.db` (intentional).
 
 ---
 
