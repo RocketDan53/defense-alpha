@@ -1062,11 +1062,114 @@ def build_comparables(
     return "\n".join(lines)
 
 
+def build_verification_notes(
+    conn: sqlite3.Connection, entity_id: str, entity: dict,
+    no_verify: bool = False, no_claude: bool = False,
+) -> str:
+    """Section 8: Data Coverage & Verification Notes via web search."""
+    lines = ["## Data Coverage & Verification Notes", ""]
+    lines.append(
+        "*Supplementary QA layer — cross-references Aperture structured data "
+        "against recent public sources.*"
+    )
+    lines.append("")
+
+    if no_verify or no_claude:
+        lines.append("*Verification skipped.*\n")
+        return "\n".join(lines)
+
+    api_key = settings.ANTHROPIC_API_KEY
+    if not api_key:
+        lines.append("*Verification skipped (ANTHROPIC_API_KEY not set).*\n")
+        return "\n".join(lines)
+
+    try:
+        from anthropic import Anthropic
+    except ImportError:
+        lines.append("*Verification skipped (anthropic package not installed).*\n")
+        return "\n".join(lines)
+
+    client = Anthropic(api_key=api_key)
+    name = entity["canonical_name"]
+
+    # Summarize what Aperture already knows
+    contract_count = conn.execute(
+        "SELECT COUNT(*) as cnt FROM contracts WHERE entity_id = ?",
+        (entity_id,),
+    ).fetchone()["cnt"]
+    regd_count = conn.execute(
+        "SELECT COUNT(*) as cnt FROM funding_events "
+        "WHERE entity_id = ? AND event_type = 'REG_D_FILING'",
+        (entity_id,),
+    ).fetchone()["cnt"]
+    sbir_count = conn.execute(
+        "SELECT COUNT(*) as cnt FROM funding_events "
+        "WHERE entity_id = ? AND event_type IN "
+        "('SBIR_PHASE_1','SBIR_PHASE_2','SBIR_PHASE_3')",
+        (entity_id,),
+    ).fetchone()["cnt"]
+
+    user_prompt = (
+        f"Search for recent contracts, partnerships, funding rounds, and "
+        f"acquisitions for {name}. Return only factual findings with sources. "
+        f"Focus on information from the last 24 months.\n\n"
+        f"For context, the Aperture Signals database currently has:\n"
+        f"- {sbir_count} SBIR awards\n"
+        f"- {contract_count} production contracts\n"
+        f"- {regd_count} Reg D (private capital) filings\n\n"
+        f"Compare what you find online against this. Respond with a structured "
+        f"list using EXACTLY these prefixes:\n"
+        f"- CONFIRMED: [data point that matches what Aperture already has]\n"
+        f"- GAP: [data point found online but likely missing from Aperture]\n"
+        f"- NOTE: [additional context that enriches the profile]\n\n"
+        f"Be specific. Include dollar amounts and dates where available. "
+        f"Do not speculate — only report what you can confirm from sources."
+    )
+
+    logger.info("Running web verification for %s...", name)
+
+    try:
+        response = client.messages.create(
+            model="claude-sonnet-4-20250514",
+            max_tokens=2048,
+            tools=[{
+                "type": "web_search_20250305",
+                "name": "web_search",
+                "max_uses": 5,
+            }],
+            messages=[{"role": "user", "content": user_prompt}],
+        )
+
+        # Extract text blocks from the response (skip tool use/result blocks)
+        text_parts = []
+        for block in response.content:
+            if hasattr(block, "text"):
+                text_parts.append(block.text.strip())
+        verification_text = "\n".join(text_parts)
+
+        if verification_text:
+            lines.append(verification_text)
+        else:
+            lines.append("*No verification results returned.*")
+        lines.append("")
+
+    except Exception as e:
+        logger.error("Verification failed for %s: %s", name, e)
+        lines.append(f"*Verification failed: {e}*\n")
+
+    return "\n".join(lines)
+
+
 def build_analyst_assessment(
     sections_data: dict, entity: dict, no_claude: bool = False
 ) -> str:
-    """Section 8: Analyst Assessment via Claude API."""
+    """Section 9: Analyst Assessment via Claude API."""
     lines = ["## Analyst Assessment", ""]
+    lines.append(
+        "> *Note: This assessment is based on structured data in the Aperture "
+        "knowledge graph. See Verification Notes for identified data gaps.*"
+    )
+    lines.append("")
 
     if no_claude:
         lines.append("*Analyst assessment skipped (--no-claude flag).*\n")
@@ -1135,6 +1238,7 @@ def generate_deal_brief(
     entity_name: str,
     output_path: str | None = None,
     no_claude: bool = False,
+    no_verify: bool = False,
     pdf: bool = False,
 ) -> str:
     """Generate a full deal intelligence brief for the given entity."""
@@ -1156,30 +1260,36 @@ def generate_deal_brief(
     sections = {}
 
     sections["Company Profile"] = build_company_profile(entity)
-    print("  [1/8] Company Profile")
+    print("  [1/9] Company Profile")
 
     sections["Government Traction"] = build_government_traction(conn, entity_id)
-    print("  [2/8] Government Traction")
+    print("  [2/9] Government Traction")
 
     sections["Private Capital Activity"] = build_private_capital(conn, entity_id)
-    print("  [3/8] Private Capital Activity")
+    print("  [3/9] Private Capital Activity")
 
     sections["Signal Profile"] = build_signal_profile(conn, entity_id)
-    print("  [4/8] Signal Profile")
+    print("  [4/9] Signal Profile")
 
     sections["Policy Alignment"] = build_policy_alignment(entity)
-    print("  [5/8] Policy Alignment")
+    print("  [5/9] Policy Alignment")
 
     sections["Lifecycle Position"] = build_lifecycle_position(conn, entity_id, entity)
-    print("  [6/8] Lifecycle Position")
+    print("  [6/9] Lifecycle Position")
 
     sections["Comparables Analysis"] = build_comparables(conn, entity_id, entity)
-    print("  [7/8] Comparables Analysis")
+    print("  [7/9] Comparables Analysis")
+
+    sections["Data Coverage & Verification Notes"] = build_verification_notes(
+        conn, entity_id, entity,
+        no_verify=no_verify, no_claude=no_claude,
+    )
+    print("  [8/9] Data Coverage & Verification Notes")
 
     sections["Analyst Assessment"] = build_analyst_assessment(
         sections, entity, no_claude=no_claude
     )
-    print("  [8/8] Analyst Assessment")
+    print("  [9/9] Analyst Assessment")
 
     # Assemble markdown
     md_parts = [
@@ -1261,6 +1371,10 @@ Examples:
         help="Skip analyst assessment (no API calls)",
     )
     parser.add_argument(
+        "--no-verify", action="store_true",
+        help="Skip web verification step",
+    )
+    parser.add_argument(
         "--verbose", "-v", action="store_true",
         help="Enable verbose logging",
     )
@@ -1277,6 +1391,7 @@ Examples:
             entity_name=args.entity,
             output_path=args.output,
             no_claude=args.no_claude,
+            no_verify=args.no_verify,
             pdf=args.pdf,
         )
 
