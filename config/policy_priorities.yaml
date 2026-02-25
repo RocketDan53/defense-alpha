@@ -44,9 +44,10 @@ priorities:
     weight: 1.22
     growth_actual: "+22%"
     description: >
-      Unmanned air/ground/maritime vehicles, AI-enabled autonomy,
-      human-machine teaming, swarming, loyal wingman, autonomous logistics,
-      Replicator-relevant technologies.
+      Unmanned air/ground/maritime vehicles (UAS/UAV/drones, UGV, USV, UUV),
+      AI-enabled autonomy, human-machine teaming, swarming, loyal wingman,
+      autonomous logistics, counter-UAS systems and drone defense,
+      Group 1-5 UAS platforms, Replicator-relevant attritable autonomous systems.
     notes: "First year DoD broke out autonomy as dedicated budget line. Navy +$2.2B alone."
     fy26_budget: "$13.4B"
 

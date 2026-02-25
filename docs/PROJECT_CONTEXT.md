@@ -1,6 +1,6 @@
 # Aperture Signals: Project Context
 
-**Last Updated:** February 19, 2026
+**Last Updated:** February 22, 2026
 **Purpose:** Spin up a new Claude instance with full context on the Aperture Signals project
 
 ---
@@ -15,7 +15,7 @@ A Python-based defense intelligence platform that aggregates government and priv
 
 ---
 
-## Current Data State (Feb 16, 2026)
+## Current Data State (Feb 22, 2026)
 
 ### Entity Counts by Type
 | Type | Count | Description |
@@ -62,6 +62,7 @@ A Python-based defense intelligence platform that aggregates government and priv
 - Report generation pipeline (`scripts/generate_prospect_report.py`, `scripts/generate_pdf_report.py`, `scripts/generate_phase2_pdf.py`)
 - SAM.gov OTA scraper (`scrapers/sam_gov_ota.py`) — built and validated, pending DB restore
 - Comparables engine — validated on Scout Space (43 comps, 5x raise multiplier finding)
+- Deal intelligence brief generator (`scripts/aperture_query.py`) — single-command 8-section deal brief with comparables, signals, policy alignment, lifecycle narrative, and Claude analyst assessment
 
 ---
 
@@ -83,6 +84,8 @@ A Python-based defense intelligence platform that aggregates government and priv
 1. **RF/Comms v2** — 56 companies, delivered to Don
 2. **Phase II Signal** — 164 companies, $8.48B thesis, shipped (`reports/phase2_signal_report.pdf`). Ready to send to Konstantine (teaser first, let him pull the report). QA: 178/178 checks passed, zero discrepancies.
 3. **Scout Space Comparables** — 43 comparable companies, contract traction = 5x raise multiplier (`reports/comparables_scout_space.md`). Raise expectation: $7-12M base, $15-25M upside with contract traction.
+4. **Scout Space Deal Brief** — Full 8-section intelligence brief with comparables (76 comps), signal profile (Tier 2, 4.88), policy alignment (space resilience 0.90), lifecycle narrative, and Claude analyst assessment (`reports/brief_scout_space.md`)
+5. **Starfish Space Deal Brief** — Deal brief generated via aperture_query.py (`reports/brief_starfish_space.md`)
 
 ---
 
@@ -343,6 +346,27 @@ Deal intelligence via SBIR embedding similarity + agency overlap + policy alignm
 - Raise expectation: $7-12M base, $15-25M upside with contract traction
 - End-to-end validation: signals → benchmarks → comparables → recommendation
 
+### 14. Deal Intelligence Brief Generator ✅ COMPLETE
+**File:** `scripts/aperture_query.py`
+
+Single-command 8-section deal intelligence brief connecting all data sources:
+- **Sections:** Company Profile, Government Traction, Private Capital Activity, Signal Profile, Policy Alignment, Lifecycle Position, Comparables Analysis, Analyst Assessment
+- Direct sqlite3 queries (not SQLAlchemy ORM) for performance and simplicity
+- Fuzzy entity lookup via `rapidfuzz` (token_sort_ratio, cutoff=75)
+- Comparables engine: primary search by policy alignment (top priority >= 0.5), secondary by core_business; filters: SBIR count 0.5x-2x target, Phase II >= 1, Reg D total >= $50K; sorted by profile similarity; top 15 in table + top 5 detailed profiles
+- Lifecycle narrative: 3-4 sentence paragraph with dated milestone progression
+- Claude analyst assessment (Sonnet) with current date in system prompt and temporal framing instruction
+- Signal composite scoring with freshness-weighted tiers (same weights as RAG engine)
+- Policy tailwind score: weighted average of scores > 0.2 (matches `processing/policy_alignment.py`)
+- Validated on Scout Space (76 comparables, Tier 2 score 4.88) and Starfish Space
+
+**Usage:**
+```bash
+python scripts/aperture_query.py --type deal --entity "Scout Space" --output reports/brief_scout_space.md
+python scripts/aperture_query.py --type deal --entity "Starfish Space" --no-claude  # Skip API call
+python scripts/aperture_query.py --type deal --entity "Shield AI" --pdf             # Also generate PDF
+```
+
 ---
 
 ## Key Decisions Made and Why
@@ -439,6 +463,7 @@ defense-alpha/
 │   ├── visualize_graph.py      # NetworkX/Pyvis interactive graph visualization
 │   ├── extract_investors.py    # Investor extraction from Reg D related persons
 │   ├── materialize_agencies.py # Agency relationship profiles (dollar volumes, counts)
+│   ├── aperture_query.py            # Deal intelligence brief generator (8-section, single command)
 │   ├── generate_prospect_report.py  # Markdown report generator
 │   ├── generate_pdf_report.py       # PDF report generator (prospect reports)
 │   ├── generate_phase2_pdf.py       # PDF report generator (Phase II Signal)
@@ -453,6 +478,8 @@ defense-alpha/
 │   ├── phase2_signal_report.md # Phase II Signal thesis report (164 companies)
 │   ├── phase2_signal_report.pdf
 │   ├── comparables_scout_space.md  # Scout Space comparables (43 companies)
+│   ├── brief_scout_space.md       # Scout Space deal intelligence brief (8 sections)
+│   ├── brief_starfish_space.md    # Starfish Space deal intelligence brief
 │   ├── graph_space_resilience.html     # Interactive ecosystem visualizations
 │   ├── graph_autonomous_systems.html
 │   └── graph_anduril.html
@@ -460,7 +487,7 @@ defense-alpha/
 │   ├── policy_priorities.yaml  # NDS priority definitions and weights
 │   └── settings.py             # App configuration
 ├── data/
-│   ├── defense_alpha.db        # SQLite database (~210MB)
+│   ├── defense_alpha.db        # SQLite database (~243MB, restored)
 │   ├── review_queue.csv        # Entity resolution review queue (201K pairs)
 │   └── pipeline_runs/          # Pipeline execution logs
 ├── docs/
@@ -550,6 +577,8 @@ Defense intelligence platform with:
 - Knowledge graph: 39,604 relationships materialized (agency, contract, policy edges)
 - Signal-response benchmarks: 3 calibrated pairs (Space Force, NDS 2018, Ukraine Drones)
 - Interactive visualizations: reports/graph_space_resilience.html, etc.
+- Deal brief generator: `python scripts/aperture_query.py --type deal --entity "Company Name"`
+- Reports delivered: Scout Space brief, Starfish Space brief, Phase II Signal, RF/Comms v2
 
 Current priorities: see Next Priority section below.
 
@@ -603,10 +632,11 @@ Aperture Signals → knowledge graph of defense capital formation
 - Apply benchmarks to current signals for quantitative predictions
 - Defensible: time-locked dataset, cross-domain linkage nobody else has
 
-**Three product surfaces validated:**
+**Four product surfaces validated:**
 1. Thesis reports (Phase II Signal)
-2. Comparables/deal intelligence (Scout Space)
-3. Sector intelligence (RF/Comms v2)
+2. Deal intelligence briefs — single-command 8-section brief via `aperture_query.py` (Scout Space, Starfish Space)
+3. Comparables/deal intelligence (Scout Space standalone)
+4. Sector intelligence (RF/Comms v2)
 - Future: signal-response benchmarks as queryable dataset
 
 **Elevator Pitch:**
@@ -618,15 +648,12 @@ One-liner: "Aperture tells defense investors where the government's money is goi
 
 ## Next Priority
 
-### 1. Restore defense_alpha.db from backup/old machine
-- DB is 0 bytes on new machine — contains all entities, contracts, funding events, signals, embeddings, relationships
-- Must restore before any analysis/scraping can resume
-- Without DB: scrapers will work into empty tables but no entity resolution context
+### ~~1. Restore defense_alpha.db from backup/old machine~~ ✅ DONE
+- DB restored (~243MB) — all entities, contracts, funding events, signals, embeddings, relationships intact
 
-### 2. Recreate .env with all API keys
-- ANTHROPIC_API_KEY (needed for classifier, policy scorer, RAG)
-- SAM_GOV_API_KEY ✅ (already set: SAM-9baea9ce-...)
-- Any others used in config/settings.py
+### ~~2. Recreate .env with all API keys~~ ✅ DONE
+- ANTHROPIC_API_KEY ✅ configured
+- SAM_GOV_API_KEY ✅ configured
 
 ### 3. Run SAM.gov OTA scraper (FY2024 first, then backfill)
 - `python -m scrapers.sam_gov_ota --start-date 2023-10-01`
@@ -642,8 +669,9 @@ One-liner: "Aperture tells defense investors where the government's money is goi
 - Unblocks statistically valid baselines for all signal-response benchmarks
 - Current pre-2019 Reg D baseline: only 7 filings (too thin for confidence intervals)
 
-### 6. Run comparables on 2-3 more companies to confirm methodology generalizes
-- Scout Space validated the approach; need to test on different sectors/stages
+### ~~6. Run comparables on 2-3 more companies to confirm methodology generalizes~~ ✅ DONE
+- Scout Space and Starfish Space briefs generated via `aperture_query.py`
+- Comparables engine integrated into deal brief pipeline (no longer standalone)
 
 ### 7. Package Phase II Signal report + Scout Space comparables as sample deliverables
 
@@ -655,6 +683,7 @@ One-liner: "Aperture tells defense investors where the government's money is goi
 
 ### 10. Connect RAG → report generator (single command query → PDF)
 - Goal: `python scripts/rag_query.py "counter-drone RF" --pdf reports/counter_drone.pdf`
+- **Partial:** `aperture_query.py` achieves single-command → markdown → optional PDF for deal briefs. RAG→sector report pipeline still needed.
 
 ### Medium Priority
 - **Policy headwind signal** — Negative signal for companies in declining budget areas (e.g., hypersonics -43%)
@@ -685,12 +714,16 @@ One-liner: "Aperture tells defense investors where the government's money is goi
 - SAM.gov OTA scraper rate limit: 3-second delay for free tier; may need 5 seconds for long backfills
 - OTA contracts stored with `procurement_type='ota'` vs `'standard'` for FAR contracts
 - 57% of OTA dollars flow through consortia — need second-level resolution for actual performers
+- SBIR raw_data JSON keys use title case with spaces: `"Award Title"`, `"Agency"` (access via `json_extract(raw_data, '$."Award Title"')`)
+- Policy alignment JSON has nested `"scores"` key: `{"scores": {"space_resilience": 0.9, ...}, "top_priorities": [...], "policy_tailwind_score": 0.712}`
+- Policy tailwind formula: `sum(score * budget_weight) / sum(budget_weight)` only for priorities where `score > 0.2`
+- `aperture_query.py` uses direct sqlite3 (not SQLAlchemy) — requires UPPERCASE enum values in SQL and `json_extract` with quoted keys
 
 ### New Machine Setup (Feb 19, 2026)
 - Code synced via git, venv recreated at `~/projects/defense-alpha/venv`
 - Python: `/opt/homebrew/bin/python3` (Python 3.14)
-- **BLOCKING:** `defense_alpha.db` is 0 bytes — must restore from old machine/backup
-- `.env` created with `SAM_GOV_API_KEY`; still needs `ANTHROPIC_API_KEY`
+- ✅ `defense_alpha.db` restored (~243MB)
+- ✅ `.env` configured with `SAM_GOV_API_KEY` + `ANTHROPIC_API_KEY`
 - Domain: aperturesignals.com (live)
 - Database filename remains `defense_alpha.db` (intentional, not rebranded)
 
@@ -710,6 +743,7 @@ One-liner: "Aperture tells defense investors where the government's money is goi
 | Semantic search | `scripts/find_similar.py` |
 | RAG engine | `processing/rag_engine.py` |
 | RAG CLI | `scripts/rag_query.py` |
+| Deal intelligence briefs | `scripts/aperture_query.py` |
 | Report generation (prospects) | `scripts/generate_prospect_report.py` |
 | Report generation (PDF) | `scripts/generate_pdf_report.py` |
 | Report generation (Phase II) | `scripts/generate_phase2_pdf.py` |
@@ -737,7 +771,7 @@ One-liner: "Aperture tells defense investors where the government's money is goi
 - Local models: MiniLM-L6-v2 for embeddings/similarity (free, fast)
 - API LLM: Claude for classification, scoring, RAG reasoning (~$55 for full universe)
 - Future: predictive model on outcome tracking data (6-12 months)
-- RAG connects embeddings (finding) to Claude (reasoning) — not yet connected to report generator as single command
+- RAG connects embeddings (finding) to Claude (reasoning) — `aperture_query.py` achieves single-command deal briefs; RAG→sector report pipeline still TBD
 
 **Key validation:** Funding raise detector shows 80% true prediction rate with 35-month median lead time. SBIR phase transitions predict private capital raises ~3 years ahead — this is the core defensible insight. Phase II Signal report ($8.48B across 164 companies) is the proof point.
 

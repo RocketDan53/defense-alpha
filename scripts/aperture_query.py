@@ -790,6 +790,8 @@ def build_comparables(
                 target_top_score = val
                 target_top_key = key
 
+    target_tags = set(_parse_json(entity.get("technology_tags")) or [])
+
     # Build candidate pool: policy-aligned startups (primary), then same core_business
     # This matches the benchmark methodology: find all startups aligned to the
     # target's top policy area, regardless of core_business classification.
@@ -799,7 +801,7 @@ def build_comparables(
     # Primary: policy alignment match (target's top priority >= 0.5)
     if target_top_key:
         policy_candidates = conn.execute(
-            """SELECT e.id, e.canonical_name, e.core_business, e.policy_alignment
+            """SELECT e.id, e.canonical_name, e.core_business, e.policy_alignment, e.technology_tags
                FROM entities e
                WHERE e.merged_into_id IS NULL
                  AND e.entity_type = 'STARTUP'
@@ -817,7 +819,7 @@ def build_comparables(
 
     # Secondary: same core_business (catch any that weren't policy-scored)
     cb_candidates = conn.execute(
-        """SELECT e.id, e.canonical_name, e.core_business, e.policy_alignment
+        """SELECT e.id, e.canonical_name, e.core_business, e.policy_alignment, e.technology_tags
            FROM entities e
            WHERE e.merged_into_id IS NULL
              AND e.entity_type = 'STARTUP'
@@ -867,6 +869,8 @@ def build_comparables(
                     tw_den += bw
             comp_tailwind = tw_num / tw_den if tw_den > 0 else 0.0
 
+        c_tags = set(_parse_json(c["technology_tags"]) or [])
+
         comps.append({
             "id": cid,
             "name": c["canonical_name"],
@@ -874,6 +878,7 @@ def build_comparables(
             **stats,
             "policy_top_score": c_top_score,
             "tailwind": comp_tailwind,
+            "tags": c_tags,
         })
 
     comps.sort(key=lambda x: -x["regd_total"])
@@ -913,6 +918,14 @@ def build_comparables(
             sim += 1.5
         elif target_contracts == 0 and c["contract_count"] == 0:
             sim += 0.5
+        # Technology tag overlap (Jaccard similarity)
+        if target_tags:
+            c_tags = c.get("tags", set())
+            if c_tags:
+                jaccard = len(target_tags & c_tags) / len(target_tags | c_tags)
+            else:
+                jaccard = 0.0
+            sim += jaccard * 2.0
         c["similarity_score"] = sim
 
     comps.sort(key=lambda x: -x["similarity_score"])

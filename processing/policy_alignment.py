@@ -152,8 +152,13 @@ SCORING GUIDANCE:
 - 0.9-1.0: Core focus (company's primary work IS this priority area)
 
 Be conservative - only score high if the SBIR titles clearly demonstrate direct relevance.
-A company building general software tools should score low on most areas.
-A company building hypersonic thermal protection should score high on hypersonics.
+
+Examples:
+- A company building general software tools should score low on most areas.
+- A company building hypersonic thermal protection should score high on hypersonics, low elsewhere.
+- A company building UAS/drone platforms or autonomous flight systems should score high on autonomous_systems (0.7-0.9), even if individual SBIR titles mention materials, sensors, or communications — the platform IS the autonomous system.
+- A company building counter-UAS or counter-drone intercept technology should score moderate-to-high on autonomous_systems (0.5-0.7) and may also score on electronic_warfare if using RF/EW approaches.
+- A company building satellite components should score high on space_resilience, not autonomous_systems, even if the satellite operates autonomously.
 
 ALSO ASSESS these boolean modifiers:
 - pacific_relevance: Does this company's work explicitly address Indo-Pacific operations, China threat scenarios, A2/AD, long-range Pacific strike, or Taiwan contingencies?
