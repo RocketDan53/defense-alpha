@@ -129,6 +129,14 @@ def _fmt_currency(val: float) -> str:
     return f"${val:,.0f}"
 
 
+def _fmt_funding_source(source: str) -> str:
+    if source and source.startswith("sec_edgar:"):
+        return source  # keep the accession number for traceability
+    elif source and source.startswith("web_enrichment:"):
+        return "Web Enrichment"
+    return source or "N/A"
+
+
 def _fmt_date(d) -> str:
     if d is None:
         return "N/A"
@@ -305,7 +313,8 @@ def build_government_traction(conn: sqlite3.Connection, entity_id: str) -> str:
     contracts = conn.execute(
         """SELECT contract_number, contracting_agency, contract_value, award_date,
                   contract_type, procurement_type, place_of_performance
-           FROM contracts WHERE entity_id = ? ORDER BY award_date""",
+           FROM contracts WHERE entity_id = ?
+           ORDER BY CASE WHEN award_date IS NULL THEN 1 ELSE 0 END, award_date""",
         (entity_id,),
     ).fetchall()
 
@@ -338,15 +347,21 @@ def build_private_capital(conn: sqlite3.Connection, entity_id: str) -> str:
     lines = ["## Private Capital Activity", ""]
 
     regd = conn.execute(
-        """SELECT amount, event_date, source, round_stage, raw_data
-           FROM funding_events
-           WHERE entity_id = ? AND event_type = 'REG_D_FILING'
-           ORDER BY event_date""",
-        (entity_id,),
+        """SELECT f.amount, f.event_date, f.source, f.round_stage, f.raw_data,
+                  f.event_type, f.parent_event_id
+           FROM funding_events f
+           WHERE f.entity_id = ?
+           AND f.event_type IN ('REG_D_FILING', 'PRIVATE_ROUND')
+           AND f.id NOT IN (
+               SELECT parent_event_id FROM funding_events
+               WHERE parent_event_id IS NOT NULL AND entity_id = ?
+           )
+           ORDER BY f.event_date""",
+        (entity_id, entity_id),
     ).fetchall()
 
     if not regd:
-        lines.append("*No Reg D filings found. No private capital raised on record.*\n")
+        lines.append("*No private capital activity found.*\n")
         return "\n".join(lines)
 
     total = sum(float(r["amount"] or 0) for r in regd)
@@ -358,7 +373,7 @@ def build_private_capital(conn: sqlite3.Connection, entity_id: str) -> str:
     for r in regd:
         lines.append(
             f"| {_fmt_date(r['event_date'])} | {_fmt_currency(r['amount'])} | "
-            f"{r['round_stage'] or 'N/A'} | {r['source'] or 'N/A'} |"
+            f"{r['round_stage'] or 'N/A'} | {_fmt_funding_source(r['source'])} |"
         )
     lines.append("")
 
@@ -586,28 +601,46 @@ def build_lifecycle_position(
 
     contracts = conn.execute(
         """SELECT contract_value, procurement_type, award_date FROM contracts
-           WHERE entity_id = ? ORDER BY award_date""",
+           WHERE entity_id = ?
+           ORDER BY CASE WHEN award_date IS NULL THEN 1 ELSE 0 END, award_date""",
         (entity_id,),
     ).fetchall()
 
     contract_count = len(contracts)
     max_contract = max((float(c["contract_value"] or 0) for c in contracts), default=0)
     has_production = any(float(c["contract_value"] or 0) > 1_000_000 for c in contracts)
-    first_contract_date = contracts[0]["award_date"] if contracts else None
+    # Get earliest known contract date (skip NULLs)
+    dated_contracts = [c for c in contracts if c["award_date"] is not None]
+    first_contract_date = dated_contracts[0]["award_date"] if dated_contracts else None
 
     regd_count = conn.execute(
-        "SELECT COUNT(*) as cnt FROM funding_events WHERE entity_id = ? AND event_type = 'REG_D_FILING'",
-        (entity_id,),
+        """SELECT COUNT(*) as cnt FROM funding_events f
+           WHERE f.entity_id = ? AND f.event_type IN ('REG_D_FILING', 'PRIVATE_ROUND')
+           AND f.id NOT IN (
+               SELECT parent_event_id FROM funding_events
+               WHERE parent_event_id IS NOT NULL AND entity_id = ?
+           )""",
+        (entity_id, entity_id),
     ).fetchone()["cnt"]
 
     regd_total = float(conn.execute(
-        "SELECT COALESCE(SUM(amount), 0) as total FROM funding_events WHERE entity_id = ? AND event_type = 'REG_D_FILING'",
-        (entity_id,),
+        """SELECT COALESCE(SUM(f.amount), 0) as total FROM funding_events f
+           WHERE f.entity_id = ? AND f.event_type IN ('REG_D_FILING', 'PRIVATE_ROUND')
+           AND f.id NOT IN (
+               SELECT parent_event_id FROM funding_events
+               WHERE parent_event_id IS NOT NULL AND entity_id = ?
+           )""",
+        (entity_id, entity_id),
     ).fetchone()["total"])
 
     first_regd = conn.execute(
-        "SELECT MIN(event_date) as d FROM funding_events WHERE entity_id = ? AND event_type = 'REG_D_FILING'",
-        (entity_id,),
+        """SELECT MIN(f.event_date) as d FROM funding_events f
+           WHERE f.entity_id = ? AND f.event_type IN ('REG_D_FILING', 'PRIVATE_ROUND')
+           AND f.id NOT IN (
+               SELECT parent_event_id FROM funding_events
+               WHERE parent_event_id IS NOT NULL AND entity_id = ?
+           )""",
+        (entity_id, entity_id),
     ).fetchone()
 
     # Determine lifecycle stage
@@ -655,11 +688,19 @@ def build_lifecycle_position(
     # Sentence 3: Contract traction
     if contract_count > 0:
         total_cv = sum(float(c["contract_value"] or 0) for c in contracts)
-        multi = f", with {contract_count} contracts totaling {_fmt_currency(total_cv)}" if contract_count > 1 else ""
-        narrative.append(
-            f"It secured its first production contract ({_fmt_currency(max_contract)}, "
-            f"{contracts[0]['procurement_type'] or 'standard'}) in {_fmt_date(first_contract_date)}{multi}."
-        )
+        date_str = _fmt_date(first_contract_date) if first_contract_date else None
+        if date_str and date_str != "N/A":
+            multi = f", with {contract_count} contracts totaling {_fmt_currency(total_cv)}" if contract_count > 1 else ""
+            narrative.append(
+                f"It secured its first production contract ({_fmt_currency(max_contract)}, "
+                f"{contracts[0]['procurement_type'] or 'standard'}) in {date_str}{multi}."
+            )
+        else:
+            narrative.append(
+                f"It has secured {contract_count} contract{'s' if contract_count > 1 else ''} "
+                f"totaling {_fmt_currency(total_cv)}, including a {_fmt_currency(max_contract)} "
+                f"{contracts[0]['procurement_type'] or 'standard'} award."
+            )
     else:
         narrative.append("No production contracts have been awarded to date.")
 
@@ -1092,14 +1133,14 @@ def build_verification_notes(
     client = Anthropic(api_key=api_key)
     name = entity["canonical_name"]
 
-    # Summarize what Aperture already knows
+    # Summarize what Aperture already knows — with enough detail for dedup
     contract_count = conn.execute(
         "SELECT COUNT(*) as cnt FROM contracts WHERE entity_id = ?",
         (entity_id,),
     ).fetchone()["cnt"]
     regd_count = conn.execute(
         "SELECT COUNT(*) as cnt FROM funding_events "
-        "WHERE entity_id = ? AND event_type = 'REG_D_FILING'",
+        "WHERE entity_id = ? AND event_type IN ('REG_D_FILING', 'PRIVATE_ROUND')",
         (entity_id,),
     ).fetchone()["cnt"]
     sbir_count = conn.execute(
@@ -1109,18 +1150,48 @@ def build_verification_notes(
         (entity_id,),
     ).fetchone()["cnt"]
 
+    # Contract details for dedup
+    contract_summaries = conn.execute(
+        """SELECT contracting_agency, contract_value, award_date, procurement_type
+           FROM contracts WHERE entity_id = ?
+           ORDER BY contract_value DESC LIMIT 10""",
+        (entity_id,),
+    ).fetchall()
+    contract_details = "\n".join(
+        f"    {c['contracting_agency'] or 'Unknown agency'}: "
+        f"{_fmt_currency(c['contract_value'])} "
+        f"({c['procurement_type'] or 'standard'}, {_fmt_date(c['award_date'])})"
+        for c in contract_summaries
+    ) or "    (none)"
+
+    # Funding details for dedup
+    regd_summaries = conn.execute(
+        """SELECT amount, event_date, round_stage, source
+           FROM funding_events
+           WHERE entity_id = ? AND event_type IN ('REG_D_FILING', 'PRIVATE_ROUND')
+           ORDER BY event_date""",
+        (entity_id,),
+    ).fetchall()
+    funding_details = "\n".join(
+        f"    {_fmt_currency(r['amount'])} {r['round_stage'] or ''} "
+        f"({_fmt_date(r['event_date'])})"
+        for r in regd_summaries
+    ) or "    (none)"
+
     user_prompt = (
         f"Search for recent contracts, partnerships, funding rounds, and "
         f"acquisitions for {name}. Return only factual findings with sources. "
         f"Focus on information from the last 24 months.\n\n"
         f"For context, the Aperture Signals database currently has:\n"
         f"- {sbir_count} SBIR awards\n"
-        f"- {contract_count} production contracts\n"
-        f"- {regd_count} Reg D (private capital) filings\n\n"
-        f"Compare what you find online against this. Respond with a structured "
-        f"list using EXACTLY these prefixes:\n"
+        f"- {contract_count} contracts:\n{contract_details}\n"
+        f"- {regd_count} private capital filings:\n{funding_details}\n\n"
+        f"Compare what you find online against this. If a finding matches "
+        f"an existing record above (similar value, same agency, close date), "
+        f"mark it as CONFIRMED, not GAP.\n\n"
+        f"Respond with a structured list using EXACTLY these prefixes:\n"
         f"- CONFIRMED: [data point that matches what Aperture already has]\n"
-        f"- GAP: [data point found online but likely missing from Aperture]\n"
+        f"- GAP: [data point found online but NOT matching any record above]\n"
         f"- NOTE: [additional context that enriches the profile]\n\n"
         f"Be specific. Include dollar amounts and dates where available. "
         f"Do not speculate — only report what you can confirm from sources."
@@ -1321,6 +1392,26 @@ def generate_deal_brief(
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(report, encoding="utf-8")
     print(f"\nReport written to: {out}")
+
+    # Log delivery for defensibility tracking
+    try:
+        import uuid as _uuid
+        signal_rows = conn.execute(
+            "SELECT id, signal_type FROM signals WHERE entity_id = ? AND status = 'ACTIVE'",
+            (entity_id,),
+        ).fetchall()
+        snapshot_data = {
+            "active_signal_ids": [r["id"] for r in signal_rows],
+            "active_signal_count": len(signal_rows),
+        }
+        conn.execute(
+            "INSERT INTO report_deliveries (id, entity_id, report_type, report_slug, delivered_at, snapshot) "
+            "VALUES (?, ?, ?, ?, datetime('now'), ?)",
+            (str(_uuid.uuid4()), entity_id, "deal_brief", _slug(name), json.dumps(snapshot_data)),
+        )
+        conn.commit()
+    except Exception as _e:
+        logging.debug(f"Delivery logging skipped: {_e}")
 
     # Optional PDF
     if pdf:

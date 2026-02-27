@@ -148,6 +148,12 @@ def build_steps(mode: str, concurrency: int) -> list[dict]:
             "command": f"python scripts/track_outcomes.py --since {thirty_days_ago}",
             "mode": "both",
         },
+        {
+            "name": "entity_snapshots",
+            "description": "Capture entity state snapshots",
+            "command": "python scripts/snapshot_entities.py",
+            "mode": "both",
+        },
     ]
 
     return steps

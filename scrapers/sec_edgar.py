@@ -615,6 +615,13 @@ class SECEdgarScraper:
         """
         self.stats = ScraperStats(start_time=datetime.now())
 
+        # Log scraper run start
+        from processing.models import ScraperRun as _ScraperRun
+        _run = _ScraperRun(source_name="sec_edgar", status="running",
+                           config={"start_date": str(start_date), "end_date": str(end_date)})
+        self.db.add(_run)
+        self.db.commit()
+
         quarters = self._get_quarters(start_date, end_date)
         logger.info(f"Scraping Form D filings: {start_date} to {end_date}")
         logger.info(f"Quarters to process: {len(quarters)}")
@@ -663,6 +670,19 @@ class SECEdgarScraper:
 
         self.stats.end_time = datetime.now()
         self.stats.log_summary()
+
+        # Log scraper run completion
+        try:
+            _run.completed_at = datetime.now()
+            _run.status = "failed" if self.stats.errors > 0 else "success"
+            _run.records_fetched = self.stats.filings_processed
+            _run.records_new = self.stats.filings_inserted
+            _run.entities_created = self.stats.entities_created
+            _run.entities_matched = self.stats.entities_matched
+            self.db.commit()
+        except Exception:
+            pass
+
         return self.stats
 
 

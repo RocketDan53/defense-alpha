@@ -28,7 +28,7 @@ from sqlalchemy.orm import Session
 
 from config.logging import logger
 from config.settings import settings
-from processing.models import Entity, EntityType, EntityMerge, MergeReason
+from processing.models import Entity, EntityCorrection, EntityType, EntityMerge, MergeReason
 
 
 @dataclass
@@ -469,6 +469,23 @@ class EntityResolver:
             )
             self.db.add(merge_record)
 
+            # Log correction for defensibility audit trail
+            correction = EntityCorrection(
+                correction_type="merge",
+                entity_a_id=source.id,
+                entity_b_id=target.id,
+                source_name_a=source.canonical_name,
+                source_name_b=target.canonical_name,
+                decision="accepted",
+                confidence_before=None,
+                confidence_after=Decimal(str(confidence_score)),
+                reasoning=f"Merged via {merge_reason.value}",
+                decided_by="system",
+                correction_source="entity_resolver",
+                evidence=details or {},
+            )
+            self.db.add(correction)
+
             self.db.commit()
 
             logger.info(
@@ -821,6 +838,22 @@ class EntityResolver:
                     logger.info(f"[MANUAL MERGE] {entity_a.canonical_name} <-> {entity_b.canonical_name}")
 
                 elif decision == "keep_separate":
+                    # Log rejection for defensibility audit trail
+                    correction = EntityCorrection(
+                        correction_type="reject_merge",
+                        entity_a_id=entity_a_id,
+                        entity_b_id=entity_b_id,
+                        source_name_a=entity_a.canonical_name,
+                        source_name_b=entity_b.canonical_name,
+                        decision="rejected",
+                        confidence_before=Decimal(str(float(row.get("similarity_score", 0)) / 100.0)),
+                        reasoning="Manual review: keep separate",
+                        decided_by="manual",
+                        correction_source="manual_csv",
+                        evidence={"csv_row": dict(row)},
+                    )
+                    self.db.add(correction)
+                    self.db.commit()
                     results["kept_separate"] += 1
                     logger.info(f"[KEEP SEPARATE] {entity_a.canonical_name} <-> {entity_b.canonical_name}")
 

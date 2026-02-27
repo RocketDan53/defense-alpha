@@ -1,6 +1,6 @@
 # Aperture Signals: Project Context
 
-**Last Updated:** February 22, 2026
+**Last Updated:** February 24, 2026
 **Purpose:** Spin up a new Claude instance with full context on the Aperture Signals project
 
 ---
@@ -15,7 +15,7 @@ A Python-based defense intelligence platform that aggregates government and priv
 
 ---
 
-## Current Data State (Feb 22, 2026)
+## Current Data State (Feb 24, 2026)
 
 ### Entity Counts by Type
 | Type | Count | Description |
@@ -24,24 +24,25 @@ A Python-based defense intelligence platform that aggregates government and priv
 | PRIME | 864 | Large defense contractors |
 | NON_DEFENSE | 553 | No defense footprint (0 SBIRs, 0 contracts, SEC EDGAR only) |
 | RESEARCH | 22 | Universities, FFRDCs, APLs |
-| **Total (unmerged)** | **10,214** | After entity resolution (834 merges from 11,048) |
+| **Total (unmerged)** | **11,134+** | After entity resolution (834 merges from 11,048+) |
 
 ### Classification Pipeline Status
 | Stage | Count | Description |
 |-------|-------|-------------|
-| Fully classified + policy scored | 5,481 | Business classification + policy alignment complete |
-| Unclassified | 3,289 | Need business classifier run before policy scoring |
+| Fully classified + policy scored | 5,488 | Business classification + policy alignment complete (120 re-scored Feb 24) |
+| Unclassified | 5,623 | ~51% of entities, need business classifier run before policy scoring |
 | Non-defense (excluded) | 553 | No defense footprint (0 SBIRs, 0 contracts, SEC EDGAR only) |
 
 ### Data Volumes
 | Table | Records | Value | Notes |
 |-------|---------|-------|-------|
-| Contracts | 13,340 | $1.16T | USASpending data |
-| Funding Events | 29,523 | - | SBIR + Reg D + VC combined |
-| Signals | 14,502 | - | 15 signal types (active only), tiered freshness decay |
+| Contracts | 13,904 | $1.16T+ | USASpending + 752 OTA contracts from SAM.gov |
+| Funding Events | 32,747+ | - | SBIR + Reg D + VC combined (EDGAR backfill added ~3K) |
+| Signals | 15,753 | - | 15 signal types (active only), tiered freshness decay, refreshed Feb 24 |
 | Outcome Events | 114 | - | 23 new_contract + 91 funding_raise |
 | SBIR Embeddings | 27,529 | - | 100% coverage, all-MiniLM-L6-v2 |
-| Policy Alignments | 5,481 | - | All eligible entities scored (requires SBIR + classified business) |
+| Policy Alignments | 5,488 | - | All eligible entities scored (120 AEROSPACE_PLATFORMS re-scored Feb 24) |
+| Relationships | 39,712 | - | Knowledge graph (rebuilt Feb 24) |
 | Entity Merges | 834 | - | High-confidence auto-merges |
 | Review Queue | 201,328 | - | Pairs flagged for manual review |
 
@@ -60,9 +61,12 @@ A Python-based defense intelligence platform that aggregates government and priv
 - CLI: `python scripts/rag_query.py "<question>"`
 - QA verification script (`scripts/qa_report_data.py`)
 - Report generation pipeline (`scripts/generate_prospect_report.py`, `scripts/generate_pdf_report.py`, `scripts/generate_phase2_pdf.py`)
-- SAM.gov OTA scraper (`scrapers/sam_gov_ota.py`) — built and validated, pending DB restore
-- Comparables engine — validated on Scout Space (43 comps, 5x raise multiplier finding)
-- Deal intelligence brief generator (`scripts/aperture_query.py`) — single-command 8-section deal brief with comparables, signals, policy alignment, lifecycle narrative, and Claude analyst assessment
+- SAM.gov OTA scraper (`scrapers/sam_gov_ota.py`) — 752 OTA contracts ingested, SAM.gov rate-limiting paused further scraping
+- Comparables engine — validated on Scout Space (43 comps, 5x raise multiplier finding); now includes Jaccard technology tag similarity (weight 2.0)
+- Deal intelligence brief generator (`scripts/aperture_query.py`) — single-command 9-section deal brief with comparables, signals, policy alignment, lifecycle narrative, web verification, and Claude analyst assessment
+- Web verification layer (`scripts/aperture_query.py:build_verification_notes()`) — Claude + web_search tool cross-references Aperture data against public sources, outputs CONFIRMED/GAP/NOTE findings
+- Analyst note PDF generator (`scripts/generate_analyst_note.py`) — one-page branded PDF for client-facing competitive positioning notes
+- SEC EDGAR Form D competitor research — EDGAR API integration for capitalization tiering of competitors by Reg D filing amounts
 
 ---
 
@@ -86,6 +90,8 @@ A Python-based defense intelligence platform that aggregates government and priv
 3. **Scout Space Comparables** — 43 comparable companies, contract traction = 5x raise multiplier (`reports/comparables_scout_space.md`). Raise expectation: $7-12M base, $15-25M upside with contract traction.
 4. **Scout Space Deal Brief** — Full 8-section intelligence brief with comparables (76 comps), signal profile (Tier 2, 4.88), policy alignment (space resilience 0.90), lifecycle narrative, and Claude analyst assessment (`reports/brief_scout_space.md`)
 5. **Starfish Space Deal Brief** — Deal brief generated via aperture_query.py (`reports/brief_starfish_space.md`)
+6. **Firestorm Labs Deal Brief** — Full 9-section deal brief with web verification, technology-tag-aware comparables (`reports/brief_firestorm_labs_v3.md`)
+7. **Firestorm Labs Analyst Note** — One-page PDF competitive positioning note for Drone Dominance program (`reports/firestorm_drone_dominance.pdf`). Includes SEC EDGAR capitalization tiering of 24 UAS competitors.
 
 ---
 
@@ -116,7 +122,9 @@ Scores entities against FY2026 National Defense Strategy priorities:
 - Async concurrency support (`--async --concurrency 10`, ~40 entities/min)
 - `--skip-scored` flag to resume interrupted runs
 - Pacific/Indo-Pacific relevance flagging (boolean tag, not weighted)
-- **5,481 entities scored** (all startups with SBIR events + classified core business)
+- **5,488 entities scored** (all startups with SBIR events + classified core business; 120 AEROSPACE_PLATFORMS re-scored Feb 24)
+- Structured examples in prompt for UAS/drone, counter-UAS, satellite, and general software companies with score range guidance
+- `autonomous_systems` description expanded to include UAS/UAV/drones, counter-UAS, Group 1-5 platforms, attritable systems
 
 **Priority Areas (with FY26 budget weights):**
 | Priority | Weight | FY26 Growth |
@@ -146,18 +154,20 @@ python -m processing.policy_alignment --names "SHIELD AI" "ANDURIL"
 | high_priority_technology | 4,422 | +1.0 | NO_DECAY | Works on priority tech areas |
 | sbir_phase_2_transition | 2,871 | +1.5 | SLOW_DECAY | Phase I to II advancement |
 | sbir_graduation_speed | 2,413 | +1.5 | SLOW_DECAY | Fast SBIR phase progression |
-| customer_concentration | 1,183 | -1.5 | NO_DECAY | >80% revenue from one agency |
-| multi_agency_interest | 758 | +1.5 | NO_DECAY | Contracts from 3+ agencies |
+| customer_concentration | 1,200 | -1.5 | NO_DECAY | >80% revenue from one agency |
+| sbir_to_vc_raise | 905 | +2.0 | SLOW_DECAY | VC validates gov't R&D (loose) |
+| multi_agency_interest | 777 | +1.5 | NO_DECAY | Contracts from 3+ agencies |
+| funding_velocity | 672 | +1.5 | FAST_DECAY | 2+ Reg D filings in 18 months |
 | first_dod_contract | 422 | +1.0 | FAST_DECAY | New entrant to defense |
 | sbir_stalled | 417 | -2.0 | NO_DECAY | 2+ Phase I, zero Phase II |
-| gone_stale | 351 | -1.5 | NO_DECAY | No activity in 24+ months |
-| sbir_to_contract_transition | 323 | +3.0 | SLOW_DECAY | SBIR to procurement pipeline |
-| funding_velocity | 319 | +1.5 | FAST_DECAY | 2+ Reg D filings in 18 months |
-| time_to_contract | 299 | +2.0 | SLOW_DECAY | Quick SBIR to procurement |
-| rapid_contract_growth | 290 | +2.5 | FAST_DECAY | Contract value growth rate |
-| sbir_to_vc_raise | 264 | +2.0 | SLOW_DECAY | VC validates gov't R&D (loose) |
-| sbir_validated_raise | 164 | +2.5 | SLOW_DECAY | Strict temporal: SBIR precedes/catalyzes raise |
-| outsized_award | 94 | +2.0 | SLOW_DECAY | Unusually large contract |
+| gone_stale | 353 | -1.5 | NO_DECAY | No activity in 24+ months |
+| sbir_to_contract_transition | 325 | +3.0 | SLOW_DECAY | SBIR to procurement pipeline |
+| time_to_contract | 300 | +2.0 | SLOW_DECAY | Quick SBIR to procurement |
+| rapid_contract_growth | 293 | +2.5 | FAST_DECAY | Contract value growth rate |
+| sbir_validated_raise | 281 | +2.5 | SLOW_DECAY | Strict temporal: SBIR precedes/catalyzes raise |
+| outsized_award | 102 | +2.0 | SLOW_DECAY | Unusually large contract |
+
+**Total active signals: 15,753** (refreshed Feb 24, 2026 — 1,163 new, 991 updated)
 
 ### 4. Composite Scoring with Freshness Decay ✅ COMPLETE
 **File:** `scripts/calculate_composite_scores.py`
@@ -307,7 +317,7 @@ python scripts/qa_report_data.py --top 10
 python scripts/qa_report_data.py --entity "SI2 TECHNOLOGIES"
 ```
 
-### 12. SAM.gov OTA Scraper ✅ BUILT (not yet run against DB)
+### 12. SAM.gov OTA Scraper ✅ PARTIAL (752 contracts ingested)
 **File:** `scrapers/sam_gov_ota.py`
 
 Scrapes Other Transaction Authority contracts from SAM.gov Contract Awards API:
@@ -315,8 +325,9 @@ Scrapes Other Transaction Authority contracts from SAM.gov Contract Awards API:
 - Entity resolution via `EntityResolver` for vendor matching
 - `procurement_type` column on Contract model (`standard` vs `ota`)
 - `ProcurementType` enum in `processing/models.py`
-- Rate limit: 3-second delay for free tier API key (`MIN_REQUEST_INTERVAL = 3.0`)
-- Dry run validated: 14,565+ OTA records for FY2024 (4,988 orders + 9,577 agreements)
+- Rate limit: 5-second delay for free tier API key (`MIN_REQUEST_INTERVAL = 5.0`)
+- **752 OTA contracts ingested** (Feb 24 run, stopped by SAM.gov rate limiting at page 7)
+- Has checkpoint/resume logic for interrupted runs
 - SAM_GOV_API_KEY stored in `.env` at project root
 - Post-scrape analytics: FY breakdown, top vendors, contracting offices
 - USASpending confirmed blind to OTAs (no type code exists)
@@ -338,33 +349,36 @@ python -m scrapers.sam_gov_ota --dry-run                         # Count only
 ```
 
 ### 13. Comparables Engine ✅ VALIDATED
-**File:** `reports/comparables_scout_space.md`
+**File:** `scripts/aperture_query.py` (integrated into deal brief pipeline)
 
-Deal intelligence via SBIR embedding similarity + agency overlap + policy alignment:
+Deal intelligence via SBIR embedding similarity + agency overlap + policy alignment + technology tag overlap:
 - Scout Space test case: 43 comparable companies identified
 - Key finding: contract traction = 5x raise multiplier (19% of comps had production contracts, raised 5x median)
 - Raise expectation: $7-12M base, $15-25M upside with contract traction
 - End-to-end validation: signals → benchmarks → comparables → recommendation
+- **Jaccard technology tag similarity** (weight 2.0) added Feb 24 — ensures domain peers rank above cross-domain matches (e.g., cybersecurity companies no longer appear as comps for UAS companies)
 
 ### 14. Deal Intelligence Brief Generator ✅ COMPLETE
 **File:** `scripts/aperture_query.py`
 
-Single-command 8-section deal intelligence brief connecting all data sources:
-- **Sections:** Company Profile, Government Traction, Private Capital Activity, Signal Profile, Policy Alignment, Lifecycle Position, Comparables Analysis, Analyst Assessment
+Single-command 9-section deal intelligence brief connecting all data sources:
+- **Sections:** Company Profile, Government Traction, Private Capital Activity, Signal Profile, Policy Alignment, Lifecycle Position, Comparables Analysis, Data Coverage & Verification Notes, Analyst Assessment
 - Direct sqlite3 queries (not SQLAlchemy ORM) for performance and simplicity
 - Fuzzy entity lookup via `rapidfuzz` (token_sort_ratio, cutoff=75)
-- Comparables engine: primary search by policy alignment (top priority >= 0.5), secondary by core_business; filters: SBIR count 0.5x-2x target, Phase II >= 1, Reg D total >= $50K; sorted by profile similarity; top 15 in table + top 5 detailed profiles
+- Comparables engine: primary search by policy alignment (top priority >= 0.5), secondary by core_business; filters: SBIR count 0.5x-2x target, Phase II >= 1, Reg D total >= $50K; sorted by profile similarity with **Jaccard technology tag overlap** (weight 2.0); top 15 in table + top 5 detailed profiles
 - Lifecycle narrative: 3-4 sentence paragraph with dated milestone progression
-- Claude analyst assessment (Sonnet) with current date in system prompt and temporal framing instruction
+- **Web verification** (`build_verification_notes()`): Claude + `web_search_20250305` server-side tool cross-references Aperture data against public sources. Outputs CONFIRMED/GAP/NOTE findings. Disabled with `--no-verify`.
+- Claude analyst assessment (Sonnet) with current date in system prompt and temporal framing instruction. Includes disclaimer referencing verification notes for identified data gaps.
 - Signal composite scoring with freshness-weighted tiers (same weights as RAG engine)
 - Policy tailwind score: weighted average of scores > 0.2 (matches `processing/policy_alignment.py`)
-- Validated on Scout Space (76 comparables, Tier 2 score 4.88) and Starfish Space
+- Validated on Scout Space, Starfish Space, and Firestorm Labs
 
 **Usage:**
 ```bash
 python scripts/aperture_query.py --type deal --entity "Scout Space" --output reports/brief_scout_space.md
 python scripts/aperture_query.py --type deal --entity "Starfish Space" --no-claude  # Skip API call
 python scripts/aperture_query.py --type deal --entity "Shield AI" --pdf             # Also generate PDF
+python scripts/aperture_query.py --type deal --entity "Firestorm Labs" --no-verify  # Skip web verification
 ```
 
 ---
@@ -419,7 +433,17 @@ combined = 0.55 x norm_composite + 0.30 x policy_tailwind + 0.15 x contract_tier
 
 **Rationale:** Sequential: ~4 entities/min. Async with 10 concurrency: ~40 entities/min. 10x improvement.
 
-### 9. Reg D Deduplication
+### 9. Technology Tag Overlap in Comparables (Jaccard Similarity)
+**Decision:** Added Jaccard similarity on `technology_tags` (weight 2.0) to comparables scoring in `aperture_query.py`.
+
+**Rationale:** Firestorm Labs (UAS/drones, tags: `autonomy`, `materials`) was matching cybersecurity companies (Illumio, Nozomi Networks) because similarity scoring ignored technology domain entirely. Jaccard weight of 2.0 (matching SBIR count weight) ensures domain peers rank above cross-domain matches. Max total similarity goes from 7.0 to 9.0. Companies with no tags get 0.0 (no penalty, just no bonus).
+
+### 10. UAS/Drone Policy Alignment Prompt Fix
+**Decision:** Expanded `autonomous_systems` description in `config/policy_priorities.yaml` and added structured examples with score ranges to `processing/policy_alignment.py`.
+
+**Rationale:** Firestorm Labs scored 0.20 on autonomous_systems despite building military UAS platforms. The policy prompt lacked UAS-specific terminology (drones, UAV, Group 1-5, counter-UAS), so Claude under-scored. After fix: Firestorm Labs scores 0.90. 120 AEROSPACE_PLATFORMS entities re-scored; 17 UAS/drone companies corrected.
+
+### 11. Reg D Deduplication
 **Decision:** Filings with identical (entity_id, event_date, amount) treated as amended filings and collapsed to one.
 
 **Rationale:** Found 25 duplicate groups totaling $1.67B in inflated capital. Biggest offender: Genesys Cloud ($1.5B duplicated). Applied consistently across all three detector locations (sbir_to_vc_raise, sbir_validated_raise, detect_funding_raises).
@@ -463,10 +487,11 @@ defense-alpha/
 │   ├── visualize_graph.py      # NetworkX/Pyvis interactive graph visualization
 │   ├── extract_investors.py    # Investor extraction from Reg D related persons
 │   ├── materialize_agencies.py # Agency relationship profiles (dollar volumes, counts)
-│   ├── aperture_query.py            # Deal intelligence brief generator (8-section, single command)
+│   ├── aperture_query.py            # Deal intelligence brief generator (9-section, single command)
 │   ├── generate_prospect_report.py  # Markdown report generator
 │   ├── generate_pdf_report.py       # PDF report generator (prospect reports)
 │   ├── generate_phase2_pdf.py       # PDF report generator (Phase II Signal)
+│   ├── generate_analyst_note.py     # One-page analyst note PDF (branded)
 │   └── policy_signal_poc.py         # Policy signal-response PoC (Space Force, original)
 ├── results/
 │   ├── benchmark_space_force.json       # Signal-response benchmark results
@@ -480,6 +505,8 @@ defense-alpha/
 │   ├── comparables_scout_space.md  # Scout Space comparables (43 companies)
 │   ├── brief_scout_space.md       # Scout Space deal intelligence brief (8 sections)
 │   ├── brief_starfish_space.md    # Starfish Space deal intelligence brief
+│   ├── brief_firestorm_labs_v3.md # Firestorm Labs deal brief (9-section, web-verified)
+│   ├── firestorm_drone_dominance.pdf  # Firestorm analyst note (one-page PDF)
 │   ├── graph_space_resilience.html     # Interactive ecosystem visualizations
 │   ├── graph_autonomous_systems.html
 │   └── graph_anduril.html
@@ -565,20 +592,19 @@ I'm working on Aperture Signals at ~/projects/defense-alpha
 cd ~/projects/defense-alpha && source venv/bin/activate
 
 Defense intelligence platform with:
-- 10,214 entities (9,328 startups, 864 primes, 553 non_defense, 22 research)
-- 5,481 fully classified + policy scored
-- 3,289 unclassified (need business classifier)
-- 13,340 contracts ($1.16T), 29,523 funding events
-- 14,502 signals (15 types, tiered freshness decay)
+- 11,134+ entities (9,328 startups, 864 primes, 553 non_defense, 22 research)
+- 5,488 fully classified + policy scored
+- 5,623 unclassified (~51%, need business classifier)
+- 13,904 contracts ($1.16T+), 32,747+ funding events
+- 15,753 signals (15 types, tiered freshness decay)
 - 114 outcome events (23 contracts, 91 funding raises — 80% prediction rate, 35mo lead)
 - 27,529 SBIR embeddings (full coverage)
 - Key finding: SBIR Phase II predicts private raises — 164 companies, $8.48B, 8-month median gap
 - Next wave pipeline: 3,221 Phase II startups with no Reg D
-- Knowledge graph: 39,604 relationships materialized (agency, contract, policy edges)
+- Knowledge graph: 39,712 relationships materialized (agency, contract, policy edges)
 - Signal-response benchmarks: 3 calibrated pairs (Space Force, NDS 2018, Ukraine Drones)
-- Interactive visualizations: reports/graph_space_resilience.html, etc.
 - Deal brief generator: `python scripts/aperture_query.py --type deal --entity "Company Name"`
-- Reports delivered: Scout Space brief, Starfish Space brief, Phase II Signal, RF/Comms v2
+- Reports delivered: Scout Space, Starfish Space, Firestorm Labs briefs + analyst note, Phase II Signal, RF/Comms v2
 
 Current priorities: see Next Priority section below.
 
@@ -588,7 +614,7 @@ Show me current DB stats to confirm state, then let's continue.
 ---
 
 ## Knowledge Graph
-- 39,604 relationships (16,656 FUNDED_BY_AGENCY, 5,811 CONTRACTED_BY_AGENCY, 17,137 ALIGNED_TO_POLICY)
+- 39,712 relationships (16,656 FUNDED_BY_AGENCY, 5,919 CONTRACTED_BY_AGENCY, 17,137 ALIGNED_TO_POLICY)
 - Relationship model in `processing/models.py` (`Relationship`, `RelationshipType`)
 - Materialization: `scripts/build_graph.py` (`--materialize`, `--stats`, `--path`, `--ecosystem`)
 - Visualization: `scripts/visualize_graph.py` (Pyvis interactive HTML)
@@ -632,11 +658,12 @@ Aperture Signals → knowledge graph of defense capital formation
 - Apply benchmarks to current signals for quantitative predictions
 - Defensible: time-locked dataset, cross-domain linkage nobody else has
 
-**Four product surfaces validated:**
+**Five product surfaces validated:**
 1. Thesis reports (Phase II Signal)
-2. Deal intelligence briefs — single-command 8-section brief via `aperture_query.py` (Scout Space, Starfish Space)
-3. Comparables/deal intelligence (Scout Space standalone)
-4. Sector intelligence (RF/Comms v2)
+2. Deal intelligence briefs — single-command 9-section brief via `aperture_query.py` (Scout Space, Starfish Space, Firestorm Labs)
+3. Analyst notes — one-page competitive positioning PDFs with EDGAR-sourced capitalization data (Firestorm Labs)
+4. Comparables/deal intelligence (Scout Space standalone, now integrated into briefs with Jaccard tag similarity)
+5. Sector intelligence (RF/Comms v2)
 - Future: signal-response benchmarks as queryable dataset
 
 **Elevator Pitch:**
@@ -655,40 +682,45 @@ One-liner: "Aperture tells defense investors where the government's money is goi
 - ANTHROPIC_API_KEY ✅ configured
 - SAM_GOV_API_KEY ✅ configured
 
-### 3. Run SAM.gov OTA scraper (FY2024 first, then backfill)
+### 3. Resume SAM.gov OTA scraper (752 contracts ingested, rate-limited)
+- 752 OTA contracts ingested before SAM.gov throttled (Feb 24)
+- Has checkpoint/resume logic — retry from different network or wait for rate limit reset
 - `python -m scrapers.sam_gov_ota --start-date 2023-10-01`
 - Then backfill: `python -m scrapers.sam_gov_ota --start-date 2015-10-01 --end-date 2023-09-30`
-- Rate limit set to 3 seconds; may need 5 seconds for full backfill
 
-### 4. Entity resolution on OTA data — quantify blind spot
+### 4. Classify remaining 5,623 entities (~51% of universe)
+- Business classifier + policy alignment for unclassified entities
+- `python -m processing.business_classifier --all --async --concurrency 10 --skip-classified`
+- Then: `python -m processing.policy_alignment --all --async --concurrency 10 --skip-scored`
+
+### 5. Entity resolution on OTA data — quantify blind spot
 - How many OTA vendors are already in the entity universe?
 - How many are new (invisible in current data)?
 
-### 5. Backfill SEC EDGAR Reg D to 2012 for stronger baselines
+### 6. Backfill SEC EDGAR Reg D to 2012 for stronger baselines
 - `python scrapers/sec_edgar.py --start-date 2012-01-01 --end-date 2019-12-31`
 - Unblocks statistically valid baselines for all signal-response benchmarks
 - Current pre-2019 Reg D baseline: only 7 filings (too thin for confidence intervals)
 
-### ~~6. Run comparables on 2-3 more companies to confirm methodology generalizes~~ ✅ DONE
-- Scout Space and Starfish Space briefs generated via `aperture_query.py`
-- Comparables engine integrated into deal brief pipeline (no longer standalone)
+### ~~7. Run comparables on 2-3 more companies to confirm methodology generalizes~~ ✅ DONE
+- Scout Space, Starfish Space, and Firestorm Labs briefs generated via `aperture_query.py`
+- Comparables engine integrated into deal brief pipeline with Jaccard tag similarity
 
-### 7. Package Phase II Signal report + Scout Space comparables as sample deliverables
+### 8. Package Phase II Signal report + Scout Space comparables as sample deliverables
 
-### 8. Build feedback capture mechanism for report recipients
+### 9. Build feedback capture mechanism for report recipients
 
-### 9. Data validation layer
+### 10. Data validation layer
 - Automated quality checks before/after pipeline
 - Validate: no orphaned contracts, no duplicate source_keys, entity type distribution sanity
 
-### 10. Connect RAG → report generator (single command query → PDF)
+### 11. Connect RAG → report generator (single command query → PDF)
 - Goal: `python scripts/rag_query.py "counter-drone RF" --pdf reports/counter_drone.pdf`
 - **Partial:** `aperture_query.py` achieves single-command → markdown → optional PDF for deal briefs. RAG→sector report pipeline still needed.
 
 ### Medium Priority
 - **Policy headwind signal** — Negative signal for companies in declining budget areas (e.g., hypersonics -43%)
 - **Remaining outcome detectors** — sbir_advance, new_agency, company_inactive (3 stubs)
-- **Classify remaining 3,289 entities** — Business classifier + policy alignment
 - **Fix Reg D filing count edge case** — NULL-date filings cause off-by-one
 - **Refresh data pulls** — USASpending (30 days), SBIR (current year), SEC EDGAR (90 days)
 - **Generate updated RF report** — Refresh with latest signal/policy data
@@ -711,13 +743,22 @@ One-liner: "Aperture tells defense investors where the government's money is goi
 - DB column names: `canonical_name` (not `name`), `headquarters_location` (not `location`), `confidence_score` (not `confidence`), `evidence` (not `raw_data`) on signals table
 - Enum values are UPPERCASE in the database: `STARTUP`, `ACTIVE`, `SBIR_PHASE_2`, etc.
 - SBIR dates are mixed format: MM/DD/YYYY (older) vs YYYY-MM-DD (2023+); use `json_extract(raw_data, '$.Proposal Award Date')` for award dates
-- SAM.gov OTA scraper rate limit: 3-second delay for free tier; may need 5 seconds for long backfills
+- SAM.gov OTA scraper rate limit: 5-second delay for free tier; SAM.gov throttled after concurrent scraper runs (Feb 24)
 - OTA contracts stored with `procurement_type='ota'` vs `'standard'` for FAR contracts
 - 57% of OTA dollars flow through consortia — need second-level resolution for actual performers
 - SBIR raw_data JSON keys use title case with spaces: `"Award Title"`, `"Agency"` (access via `json_extract(raw_data, '$."Award Title"')`)
 - Policy alignment JSON has nested `"scores"` key: `{"scores": {"space_resilience": 0.9, ...}, "top_priorities": [...], "policy_tailwind_score": 0.712}`
 - Policy tailwind formula: `sum(score * budget_weight) / sum(budget_weight)` only for priorities where `score > 0.2`
 - `aperture_query.py` uses direct sqlite3 (not SQLAlchemy) — requires UPPERCASE enum values in SQL and `json_extract` with quoted keys
+
+### Web Verification Layer
+- `build_verification_notes()` in `aperture_query.py` uses Claude Sonnet + `web_search_20250305` server-side tool
+- Tool definition: `{"type": "web_search_20250305", "name": "web_search", "max_uses": 5}`
+- Passes current DB counts (SBIRs, contracts, Reg D) for comparison against public sources
+- Extracts text blocks from response (skips tool_use/tool_result blocks)
+- Outputs CONFIRMED/GAP/NOTE findings
+- Disabled with `--no-verify` flag
+- First use on Firestorm Labs caught: $47M Series A, $100M Air Force IDIQ, HP partnership — all missing from Aperture data
 
 ### New Machine Setup (Feb 19, 2026)
 - Code synced via git, venv recreated at `~/projects/defense-alpha/venv`
@@ -758,6 +799,7 @@ One-liner: "Aperture tells defense investors where the government's money is goi
 | Agency materialization | `scripts/materialize_agencies.py` |
 | Technology clusters | `scripts/tech_clusters.py` |
 | OTA scraper | `scrapers/sam_gov_ota.py` |
+| Analyst note PDF | `scripts/generate_analyst_note.py` |
 | Policy config | `config/policy_priorities.yaml` |
 | DB models | `processing/models.py` |
 

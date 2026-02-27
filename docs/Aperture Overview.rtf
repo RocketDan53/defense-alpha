@@ -1,0 +1,115 @@
+{\rtf1\ansi\ansicpg1252\cocoartf2867
+\cocoatextscaling0\cocoaplatform0{\fonttbl\f0\froman\fcharset0 Times-Roman;\f1\froman\fcharset0 Times-Bold;\f2\froman\fcharset0 Times-Italic;
+}
+{\colortbl;\red255\green255\blue255;\red0\green0\blue0;\red229\green232\blue236;\red255\green255\blue255;
+}
+{\*\expandedcolortbl;;\cssrgb\c0\c1\c1;\cssrgb\c91876\c92662\c94116;\cssrgb\c100000\c100000\c99985;
+}
+{\*\listtable{\list\listtemplateid1\listhybrid{\listlevel\levelnfc0\levelnfcn0\leveljc0\leveljcn0\levelfollow0\levelstartat1\levelspace360\levelindent0{\*\levelmarker \{decimal\}}{\leveltext\leveltemplateid1\'01\'00;}{\levelnumbers\'01;}\fi-360\li720\lin720 }{\listname ;}\listid1}}
+{\*\listoverridetable{\listoverride\listid1\listoverridecount0\ls1}}
+\margl1440\margr1440\vieww11520\viewh8400\viewkind0
+\deftab720
+\pard\pardeftab720\partightenfactor0
+
+\f0\fs24 \cf2 \expnd0\expndtw0\kerning0
+\outl0\strokewidth0 \strokec3 DATA SOURCES\
+  SBIR.gov \uc0\u9472 \u9472 \u9472 \u9472 \u9472 \u9472 \u9472 \u9472 \u9472 \u9472 \u9488 \
+  USASpending/FPDS \uc0\u9472 \u9472 \u9508 \
+  SEC EDGAR Form D \uc0\u9472 \u9472 \u9508 \u9472 \u9472 \u8594  Scrapers (BaseScraper + audit logging)\
+  SAM.gov OTA \uc0\u9472 \u9472 \u9472 \u9472 \u9472 \u9472 \u9472 \u9508      each with ScraperRun tracking\
+  Web Enrichment \uc0\u9472 \u9472 \u9472 \u9472 \u9496      \u8595  (not yet built)\
+                           \uc0\u8595 \
+INGESTION & RESOLUTION\
+  Raw records \uc0\u9472 \u9472 \u8594  Entity Resolution \u9472 \u9472 \u8594  Canonical entities\
+                  (fuzzy matching,       (~thousands in DB)\
+                   correction logging,\
+                   merge tracking)\
+                           \uc0\u8595 \
+DATA MODEL (SQLite, 245MB)\
+  \uc0\u9484 \u9472 \u9472 \u9472 \u9472 \u9472 \u9472 \u9472 \u9472 \u9472 \u9472 \u9472 \u9472 \u9472 \u9472 \u9472 \u9472 \u9472 \u9472 \u9472 \u9472 \u9472 \u9472 \u9472 \u9472 \u9472 \u9472 \u9472 \u9472 \u9472 \u9472 \u9472 \u9472 \u9472 \u9472 \u9472 \u9472 \u9472 \u9472 \u9472 \u9472 \u9472 \u9472 \u9472 \u9472 \u9472 \u9488 \
+  \uc0\u9474  entities          \'97 canonical company records\u9474 \
+  \uc0\u9474  funding_events    \'97 SBIRs + Reg D filings   \u9474 \
+  \uc0\u9474  contracts         \'97 FPDS production awards   \u9474 \
+  \uc0\u9474  signals           \'97 detected momentum signals\u9474 \
+  \uc0\u9474  relationships     \'97 entity-to-entity links   \u9474 \
+  \uc0\u9474  entity_snapshots  \'97 daily state captures     \u9474 \
+  \uc0\u9474  entity_corrections\'97 resolution audit trail   \u9474 \
+  \uc0\u9474  report_deliveries \'97 what you've sent out     \u9474 \
+  \uc0\u9474  signal_validations\'97 feedback on accuracy     \u9474 \
+  \uc0\u9474  scraper_runs      \'97 ingestion audit log      \u9474 \
+  \uc0\u9474  enrichment_findings\'97 staged web data (new)   \u9474 \
+  \uc0\u9492 \u9472 \u9472 \u9472 \u9472 \u9472 \u9472 \u9472 \u9472 \u9472 \u9472 \u9472 \u9472 \u9472 \u9472 \u9472 \u9472 \u9472 \u9472 \u9472 \u9472 \u9472 \u9472 \u9472 \u9472 \u9472 \u9472 \u9472 \u9472 \u9472 \u9472 \u9472 \u9472 \u9472 \u9472 \u9472 \u9472 \u9472 \u9472 \u9472 \u9472 \u9472 \u9472 \u9472 \u9472 \u9472 \u9496 \
+                           \uc0\u8595 \
+PROCESSING & INTELLIGENCE\
+  Signal Detection \uc0\u9472 \u9472 \u8594  13 positive + 3 negative signal types\
+                       weighted, freshness-adjusted, composite scored\
+  \
+  Policy Alignment \uc0\u9472 \u9472 \u8594  10 budget priority areas with FY weights\
+                       tailwind scoring per entity\
+  \
+  Lifecycle Engine \uc0\u9472 \u9472 \u8594  7 stages (early \u8594  scaling)\
+                       shared across briefs + snapshots\
+  \
+  Knowledge Graph \uc0\u9472 \u9472 \u8594   entity relationships, investor edges\
+                       co-investor detection, portfolio mapping\
+  \
+  Snapshot + Deltas \uc0\u9472 \u8594  daily state capture, change detection\
+                       trajectory analysis over time\
+                           \uc0\u8595 \
+OUTPUT LAYER\
+  aperture_query.py \uc0\u9472 \u9472 \u8594  9-section deal intelligence briefs\
+    1. Company Profile\
+    2. Government Traction (SBIRs + contracts)\
+    3. Private Capital Activity (Reg D + timeline)\
+    4. Signal Profile (composite scoring)\
+    5. Policy Alignment (budget tailwinds)\
+    6. Lifecycle Position (narrative)\
+    7. Comparables Analysis (benchmarks across ~100 peers)\
+    8. Data Coverage & Verification (Claude + web search)\
+    9. Analyst Assessment (Claude synthesis)\
+\
+  Custom reports \uc0\u9472 \u9472 \u9472 \u9472 \u8594  Investor leads (like the Don report)\
+                       Prospect lists (RF & Comms report)\
+                       Competitive landscapes\
+                           \uc0\u8595 \
+DELIVERY & FEEDBACK\
+  Report Deliveries \uc0\u9472 \u9472 \u8594  logged with snapshot_id link\
+  Signal Validation \uc0\u9472 \u9472 \u8594  track which signals were right\
+  Branded PDFs \uc0\u9472 \u9472 \u9472 \u9472 \u9472 \u9472 \u9472 \u8594  Aperture Signals Intelligence format\
+\pard\pardeftab720\sa240\partightenfactor0
+
+\f1\b \cf2 \strokec4 What this actually provides \'97 in plain language:
+\f0\b0 \cf2 \strokec4 \
+At the core, Aperture answers three questions that nobody else can answer systematically:\
+\pard\tx220\tx720\pardeftab720\li720\fi-720\partightenfactor0
+\ls1\ilvl0
+\f1\b \cf2 \kerning1\expnd0\expndtw0 \outl0\strokewidth0 {\listtext	1	}\cf2 \expnd0\expndtw0\kerning0
+\outl0\strokewidth0 \strokec4 "Which companies are gaining traction with the government?"
+\f0\b0 \cf2 \strokec4  \'97 The signal detection layer watches for SBIR phase transitions, contract velocity, multi-agency interest, and outsized awards. The composite scoring ranks them. The snapshots track how those scores change over time.\
+\ls1\ilvl0
+\f1\b \cf2 \kerning1\expnd0\expndtw0 \outl0\strokewidth0 {\listtext	2	}\cf2 \expnd0\expndtw0\kerning0
+\outl0\strokewidth0 \strokec4 "When is a defense company ready to raise, and from whom?"
+\f0\b0 \cf2 \strokec4  \'97 The comparables engine benchmarks any company against ~100 peers on timing (months from Phase II to first raise), capital amounts (median/mean at each stage), and SBIR depth at raise. The investor network graph maps who's been writing checks in adjacent thesis areas via Form D director data.\
+\ls1\ilvl0
+\f1\b \cf2 \kerning1\expnd0\expndtw0 \outl0\strokewidth0 {\listtext	3	}\cf2 \expnd0\expndtw0\kerning0
+\outl0\strokewidth0 \strokec4 "Where is government policy creating tailwinds?"
+\f0\b0 \cf2 \strokec4  \'97 The policy alignment layer maps each company to 10 budget priority areas with real FY growth rates. A company aligned to space resilience (+38%) tells a different story than one aligned to hypersonics (-43%).\
+\pard\pardeftab720\sa240\partightenfactor0
+
+\f1\b \cf2 \strokec4 Where the value compounds:
+\f0\b0 \cf2 \strokec4 \
+The defensibility layers you just built are what make this a data 
+\f2\i \cf2 \strokec4 asset
+\f0\i0 \cf2 \strokec4  rather than just a tool. Every day the snapshots run, you get trajectory data no one else has. Every entity resolution correction improves matching accuracy. Every report delivery + feedback cycle validates or invalidates your signal definitions. Every enrichment finding closes a gap permanently \'97 not just for one report, but for every future query against that entity.\
+
+\f1\b \cf2 \strokec4 The honest gaps right now:
+\f0\b0 \cf2 \strokec4 \
+The biggest are the ones you're closing: OTA contracts and complete funding round sizes. Without those, your lifecycle classification underestimates companies (X-Bow showing "Prototype" when they're in production) and your government traction section has blind spots on exactly the contract types that matter most for defense startups.\
+The second gap is coverage breadth on the entity side. You mentioned the data quality issue where semantic search matches keywords without understanding business models. Your entity classification confidence scores help, but there's likely still noise in the entity set that affects comparables quality.\
+The third gap is the feedback loop \'97 it's instrumented now but empty. You need deliveries and outcomes to start flowing through it before you can credibly say "our signals have a validated hit rate."\
+
+\f1\b \cf2 \strokec4 The strategic picture:
+\f0\b0 \cf2 \strokec4 \
+What you've built is a vertical intelligence infrastructure for defense private markets. The moat is the combination of fragmented data sources unified through entity resolution, proprietary signal definitions, and temporal trajectory data that compounds daily. No one can replicate this by prompting an LLM because the data infrastructure underneath doesn't exist anywhere else in assembled form.\
+The question is whether you monetize it as a platform (subscriptions for ongoing access), a service (reports on demand), or a fund edge (use it to invest). Those are very different businesses, but the underlying asset is the same.\
+}

@@ -432,6 +432,13 @@ class USASpendingScraper:
         self.stats = ScraperStats()
         self.stats.start_time = datetime.now()
 
+        # Log scraper run start
+        from processing.models import ScraperRun as _ScraperRun
+        _run = _ScraperRun(source_name="usaspending", status="running",
+                           config={"start_date": str(start_date), "end_date": str(end_date), "agency": agency})
+        self.db.add(_run)
+        self.db.commit()
+
         logger.info("=" * 60)
         logger.info("USA SPENDING SCRAPER - STARTING")
         logger.info("=" * 60)
@@ -537,6 +544,18 @@ class USASpendingScraper:
 
         self.stats.end_time = datetime.now()
         self.stats.log_summary()
+
+        # Log scraper run completion
+        try:
+            _run.completed_at = datetime.now()
+            _run.status = "failed" if self.stats.errors > 0 else "success"
+            _run.records_fetched = self.stats.total_fetched
+            _run.records_new = self.stats.new_contracts
+            _run.entities_created = self.stats.new_entities
+            _run.entities_matched = self.stats.matched_entities
+            self.db.commit()
+        except Exception:
+            pass
 
         return self.stats
 

@@ -26,6 +26,7 @@ from sqlalchemy.orm import Session
 from processing.models import (
     Contract,
     Entity,
+    EntityType,
     FundingEvent,
     FundingEventType,
     Relationship,
@@ -50,6 +51,7 @@ class KnowledgeGraph:
 
         self.materialize_agency_funded()
         self.materialize_agency_contracted()
+        self.materialize_investor_edges()
         self.materialize_policy_alignment()
         self.db.commit()
 
@@ -170,6 +172,131 @@ class KnowledgeGraph:
 
         self.db.flush()
         logger.info(f"  Created {count:,} ALIGNED_TO_POLICY relationships")
+
+    def materialize_investor_edges(self):
+        """Create INVESTED_IN_BY edges from INVESTOR entities and funding events."""
+        logger.info("Materializing INVESTED_IN_BY relationships...")
+
+        # Find all INVESTOR entities
+        investors = self.db.query(Entity).filter(
+            Entity.entity_type == EntityType.INVESTOR,
+            Entity.merged_into_id.is_(None),
+        ).all()
+
+        count = 0
+        for investor in investors:
+            inv_name_lower = investor.canonical_name.lower()
+            # Also match on name variants
+            all_names = [investor.canonical_name] + (investor.name_variants or [])
+
+            # Find funding events where this investor appears in investors_awarders
+            for name in all_names:
+                rows = self.db.execute(text("""
+                    SELECT
+                        fe.entity_id,
+                        COALESCE(SUM(fe.amount), 0) as total_value,
+                        MIN(fe.event_date) as first_date,
+                        MAX(fe.event_date) as last_date,
+                        COUNT(*) as event_count
+                    FROM funding_events fe
+                    JOIN entities e ON fe.entity_id = e.id
+                    WHERE e.merged_into_id IS NULL
+                      AND fe.investors_awarders LIKE :pattern
+                      AND fe.event_type IN ('REG_D_FILING', 'VC_ROUND')
+                    GROUP BY fe.entity_id
+                """), {"pattern": f"%{name}%"}).fetchall()
+
+                for entity_id, total_value, first_dt, last_dt, event_count in rows:
+                    if entity_id == investor.id:
+                        continue  # Don't self-link
+                    # Check for existing edge to avoid duplicates
+                    existing = self.db.query(Relationship).filter(
+                        Relationship.source_entity_id == entity_id,
+                        Relationship.target_entity_id == investor.id,
+                        Relationship.relationship_type == RelationshipType.INVESTED_IN_BY,
+                    ).first()
+                    if existing:
+                        continue
+
+                    rel = Relationship(
+                        source_entity_id=entity_id,
+                        relationship_type=RelationshipType.INVESTED_IN_BY,
+                        target_entity_id=investor.id,
+                        target_name=investor.canonical_name,
+                        weight=Decimal(str(total_value)),
+                        properties={"event_count": event_count},
+                        first_observed=_parse_date(first_dt),
+                        last_observed=_parse_date(last_dt),
+                    )
+                    self.db.add(rel)
+                    count += 1
+
+        self.db.flush()
+        logger.info(f"  Created {count:,} INVESTED_IN_BY relationships")
+
+    def find_co_investors(self, entity_id: str) -> list[dict]:
+        """
+        Find investors that share portfolio companies with this entity's investors.
+
+        Returns list of co-investor info dicts.
+        """
+        # Get this entity's investors
+        my_investors = self.db.query(Relationship).filter(
+            Relationship.source_entity_id == entity_id,
+            Relationship.relationship_type == RelationshipType.INVESTED_IN_BY,
+        ).all()
+
+        my_investor_ids = {r.target_entity_id for r in my_investors if r.target_entity_id}
+        if not my_investor_ids:
+            return []
+
+        # Find other companies funded by the same investors
+        co_investments = defaultdict(list)
+        for inv_id in my_investor_ids:
+            peers = self.db.query(Relationship).filter(
+                Relationship.target_entity_id == inv_id,
+                Relationship.relationship_type == RelationshipType.INVESTED_IN_BY,
+                Relationship.source_entity_id != entity_id,
+            ).all()
+            for peer in peers:
+                co_investments[peer.source_entity_id].append(inv_id)
+
+        results = []
+        for peer_id, shared_investor_ids in co_investments.items():
+            peer = self.db.query(Entity).filter(Entity.id == peer_id).first()
+            if not peer:
+                continue
+            results.append({
+                "entity_id": peer_id,
+                "entity_name": peer.canonical_name,
+                "shared_investors": len(shared_investor_ids),
+                "shared_investor_ids": shared_investor_ids,
+            })
+
+        return sorted(results, key=lambda x: x["shared_investors"], reverse=True)
+
+    def get_investor_portfolio(self, investor_entity_id: str) -> list[dict]:
+        """List all companies for a given investor entity."""
+        rels = self.db.query(Relationship).filter(
+            Relationship.target_entity_id == investor_entity_id,
+            Relationship.relationship_type == RelationshipType.INVESTED_IN_BY,
+        ).all()
+
+        results = []
+        for rel in rels:
+            company = self.db.query(Entity).filter(
+                Entity.id == rel.source_entity_id
+            ).first()
+            if not company:
+                continue
+            results.append({
+                "entity_id": company.id,
+                "entity_name": company.canonical_name,
+                "investment_value": float(rel.weight) if rel.weight else 0,
+                "first_observed": str(rel.first_observed) if rel.first_observed else None,
+            })
+
+        return sorted(results, key=lambda x: x["investment_value"], reverse=True)
 
     # ====================================================================
     # Path Queries
