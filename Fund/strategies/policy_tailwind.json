@@ -19,6 +19,16 @@
         "filters": {
             "min_policy_tailwind": 0.3,
             "excluded_signals": ["sbir_stalled", "gone_stale"]
+        },
+        "benchmark_matching": {
+            "match_variables": [
+                "sbir_count",
+                "contract_count",
+                "contract_value_log",
+                "core_business",
+                "freshness_adjusted_score"
+            ],
+            "n_bootstrap": 100
         }
     }
 }
