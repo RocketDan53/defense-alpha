@@ -34,3 +34,5 @@ data/*.sqlite
 data/ota_extracts/
 logs/
 *.log
+data/*.bak*
+data/*.db
