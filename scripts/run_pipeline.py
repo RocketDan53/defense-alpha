@@ -84,6 +84,12 @@ def build_steps(mode: str, concurrency: int) -> list[dict]:
             "command": f"python scrapers/sec_edgar.py --start-date {ninety_days_ago} --end-date {today}",
             "mode": "full",
         },
+        {
+            "name": "ota_incremental_scraper",
+            "description": "Scrape OTA contracts (last 30 days)",
+            "command": f"python -m scrapers.sam_gov_ota --start-date {thirty_days_ago} --end-date {today}",
+            "mode": "full",
+        },
         # --- BOTH MODES: processing pipeline ---
         {
             "name": "entity_resolution",

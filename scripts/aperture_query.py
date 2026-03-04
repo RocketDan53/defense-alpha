@@ -23,26 +23,81 @@ import sys
 from datetime import date, datetime
 from pathlib import Path
 
+import yaml
+
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from config.settings import settings
 
 logger = logging.getLogger(__name__)
 
+
+# ── Policy config loading ──────────────────────────────────────────────
+
+def _load_policy_config() -> dict:
+    """Load policy priorities from YAML config."""
+    config_path = Path(__file__).parent.parent / "config" / "policy_priorities.yaml"
+    if not config_path.exists():
+        logger.warning("Policy config not found at %s, using fallback", config_path)
+        return {}
+    with open(config_path) as f:
+        return yaml.safe_load(f)
+
+
+def _parse_growth_to_budget_weight(growth_str: str) -> float:
+    """Convert '+38%' -> 1.38, '-43%' -> 0.57."""
+    match = re.match(r'([+-]?\d+)%', growth_str.replace('"', '').strip())
+    if match:
+        return 1.0 + int(match.group(1)) / 100
+    return 1.0
+
+
+def _build_budget_weights(config: dict) -> dict:
+    """Extract budget weights from policy config (works with both v1 and v2 format)."""
+    priorities = config.get("budget_priorities", config)
+    weights = {}
+    for key, val in priorities.items():
+        if isinstance(val, dict) and "fy26_growth" in val:
+            weights[key] = _parse_growth_to_budget_weight(val["fy26_growth"])
+    return weights
+
+
+def _build_budget_direction(config: dict) -> dict:
+    """Extract budget direction strings from policy config."""
+    priorities = config.get("budget_priorities", config)
+    directions = {}
+    for key, val in priorities.items():
+        if isinstance(val, dict) and "fy26_growth" in val:
+            growth_str = val["fy26_growth"].replace('"', '').strip()
+            pct = re.match(r'([+-]?\d+)%', growth_str)
+            if pct:
+                num = int(pct.group(1))
+                label = "growth" if num >= 0 else "decline"
+                directions[key] = f"{growth_str} {label}"
+    return directions
+
+
+_POLICY_CONFIG = _load_policy_config()
+
 # ── Signal weights (mirrored from processing/rag_engine.py) ──────────────
 
 POSITIVE_WEIGHTS = {
+    "jar_funding": 3.5,
     "sbir_to_contract_transition": 3.0,
+    "meia_experimentation": 3.0,
     "rapid_contract_growth": 2.5,
+    "kop_alignment": 2.5,
+    "sbir_validated_raise": 2.5,
     "sbir_to_vc_raise": 2.0,
     "outsized_award": 2.0,
     "sbir_phase_3_transition": 2.0,
     "time_to_contract": 2.0,
-    "sbir_validated_raise": 2.5,
+    "pae_portfolio_member": 2.0,
     "sbir_phase_2_transition": 1.5,
     "multi_agency_interest": 1.5,
     "sbir_graduation_speed": 1.5,
     "funding_velocity": 1.5,
+    "commercial_pathway_fit": 1.5,
     "high_priority_technology": 1.0,
     "first_dod_contract": 1.0,
 }
@@ -51,52 +106,53 @@ NEGATIVE_WEIGHTS = {
     "sbir_stalled": -2.0,
     "customer_concentration": -1.5,
     "gone_stale": -1.5,
+    "sbir_lapse_risk": -1.5,
 }
 
 ALL_WEIGHTS = {**POSITIVE_WEIGHTS, **NEGATIVE_WEIGHTS}
 
 SIGNAL_DISPLAY_NAMES = {
+    "jar_funding": "JAR Funding",
     "sbir_to_contract_transition": "SBIR->Contract",
+    "meia_experimentation": "MEIA Experimentation",
     "rapid_contract_growth": "Rapid Growth",
+    "kop_alignment": "KOP Alignment",
+    "sbir_validated_raise": "SBIR Validated Raise",
     "sbir_to_vc_raise": "SBIR + VC Raise",
     "outsized_award": "Outsized Award",
     "sbir_phase_2_transition": "SBIR Phase II",
     "sbir_phase_3_transition": "SBIR Phase III",
+    "pae_portfolio_member": "PAE Portfolio",
     "time_to_contract": "Fast Time-to-Contract",
-    "sbir_validated_raise": "SBIR Validated Raise",
     "multi_agency_interest": "Multi-Agency",
     "sbir_graduation_speed": "Fast SBIR Graduation",
     "funding_velocity": "Funding Velocity",
+    "commercial_pathway_fit": "Commercial Pathway",
     "high_priority_technology": "High-Priority Tech",
     "first_dod_contract": "First DoD Contract",
     "sbir_stalled": "SBIR Stalled",
     "customer_concentration": "Customer Concentration",
     "gone_stale": "Gone Stale",
+    "sbir_lapse_risk": "SBIR Lapse Risk",
 }
 
-BUDGET_WEIGHTS = {
+BUDGET_WEIGHTS = _build_budget_weights(_POLICY_CONFIG) or {
+    # Fallback values if YAML loading fails
     "space_resilience": 1.38,
-    "nuclear_modernization": 1.26,
-    "autonomous_systems": 1.22,
-    "supply_chain_resilience": 1.15,
-    "contested_logistics": 1.12,
+    "nuclear_modernization": 1.17,
+    "autonomous_systems": 1.10,
+    "supply_chain_resilience": 1.07,
+    "contested_logistics": 1.10,
     "electronic_warfare": 1.10,
     "jadc2": 1.10,
-    "border_homeland": 1.05,
-    "cyber_offense_defense": 1.04,
+    "border_homeland": 1.10,
+    "cyber_offense_defense": 1.10,
     "hypersonics": 0.57,
 }
 
-BUDGET_DIRECTION = {
+BUDGET_DIRECTION = _build_budget_direction(_POLICY_CONFIG) or {
+    # Fallback values if YAML loading fails
     "space_resilience": "+38% growth",
-    "nuclear_modernization": "+26% growth",
-    "autonomous_systems": "+22% growth",
-    "supply_chain_resilience": "+15% growth",
-    "contested_logistics": "+12% growth",
-    "electronic_warfare": "+10% growth",
-    "jadc2": "+10% growth",
-    "border_homeland": "+5% growth",
-    "cyber_offense_defense": "+4% growth",
     "hypersonics": "-43% decline",
 }
 
@@ -516,7 +572,7 @@ def _extract_policy_scores(pa: dict) -> dict:
     return scores
 
 
-def build_policy_alignment(entity: dict) -> str:
+def build_policy_alignment(conn: sqlite3.Connection, entity_id: str, entity: dict) -> str:
     """Section 5: Policy Alignment."""
     lines = ["## Policy Alignment", ""]
 
@@ -555,8 +611,32 @@ def build_policy_alignment(entity: dict) -> str:
 
     tailwind = tailwind_num / tailwind_den if tailwind_den > 0 else 0.0
     lines.append(f"**Policy Tailwind Score:** {tailwind:.3f}")
-
     lines.append("")
+
+    # KOP Alignment (from signals, if present)
+    kop_signals = conn.execute(
+        """SELECT evidence FROM signals
+           WHERE entity_id = ? AND signal_type = 'kop_alignment' AND status = 'ACTIVE'""",
+        (entity_id,),
+    ).fetchall()
+
+    if kop_signals:
+        lines.append("**Key Operational Problem Alignment:**")
+        lines.append("")
+        for ks in kop_signals:
+            ev = _parse_json(ks["evidence"])
+            if ev:
+                rank_str = (
+                    f"(est. rank #{ev.get('kop_rank', '?')})"
+                    if ev.get("kop_status") == "estimated"
+                    else f"(rank #{ev.get('kop_rank', '?')})"
+                )
+                lines.append(f"- **{ev.get('kop_name', 'Unknown KOP')}** {rank_str}")
+                indicators = ev.get("matching_indicators", [])
+                if indicators:
+                    lines.append(f"  - Matching indicators: {', '.join(indicators)}")
+        lines.append("")
+
     return "\n".join(lines)
 
 
@@ -1231,16 +1311,76 @@ def build_verification_notes(
     return "\n".join(lines)
 
 
+ACQUISITION_REFORM_CONTEXT = """
+ACQUISITION REFORM CONTEXT (critical for current analysis):
+On August 20, 2025, DoD dismantled JCIDS and replaced it with:
+- Key Operational Problems (KOPs): JROC ranks the joint force's top operational problems
+- MEIA: Mission Engineering & Integration Activity runs experiments with industry
+- JAR: Joint Acceleration Reserve provides year-of-execution funding for validated solutions
+- PAEs: Portfolio Acquisition Executives replace PEOs with broader authority
+
+The FY26 NDAA (Dec 2025) codified: portfolio-based acquisition, commercial-first default
+("presumption of commerciality"), expanded nontraditional contractor definition, TINA
+threshold raised to $10M, CAS threshold raised to $100M.
+
+CRITICAL: SBIR/STTR authorizations lapsed Oct 1, 2025 and were NOT reauthorized.
+Companies dependent on SBIR face pipeline disruption.
+
+When assessing this company, consider:
+1. How does it position under MEIA experimentation (warfighter-first validation)?
+2. Does it benefit from commercial-first pathway?
+3. Is it exposed to SBIR lapse risk?
+4. Which KOPs does its technology address?
+5. Are the company's SBIR awards pre-lapse (still valid, work continues) or was the company
+   dependent on future SBIR funding rounds that are now disrupted?
+"""
+
+CLIENT_FACING_ANALYST_CONTEXT = """
+Write for a defense industry professional evaluating business development
+opportunities. Frame findings as actionable market intelligence. Reference
+specific contracts, funding amounts, and technology capabilities. Avoid
+internal scoring methodology language.
+
+Current market context: DoD acquisition is shifting to warfighter-driven
+experimentation and commercial-first procurement under 2025-2026 reforms.
+Companies with production-ready solutions and commercial revenue have an
+accelerated path. SBIR/STTR funding pipeline has been disrupted since Oct 2025.
+"""
+
+
+def _sbir_lapse_status(conn: sqlite3.Connection, entity_id: str) -> str:
+    """Determine if entity's SBIR pipeline is pre-lapse (safe) or at risk."""
+    latest_sbir = conn.execute(
+        """SELECT MAX(event_date) as latest FROM funding_events
+           WHERE entity_id = ? AND event_type LIKE 'SBIR_%'""",
+        (entity_id,),
+    ).fetchone()
+    if not latest_sbir or not latest_sbir["latest"]:
+        return "no_sbir"
+    if latest_sbir["latest"] >= "2024-01-01":
+        return "active_pre_lapse"  # Recent SBIR, work funded
+    elif latest_sbir["latest"] >= "2021-01-01":
+        return "aging_pre_lapse"  # Older SBIR, may have been expecting renewal
+    else:
+        return "historical"  # Old enough that lapse is irrelevant
+
+
 def build_analyst_assessment(
-    sections_data: dict, entity: dict, no_claude: bool = False
+    sections_data: dict,
+    entity: dict,
+    no_claude: bool = False,
+    client_facing: bool = False,
+    conn: sqlite3.Connection | None = None,
+    entity_id: str | None = None,
 ) -> str:
     """Section 9: Analyst Assessment via Claude API."""
     lines = ["## Analyst Assessment", ""]
-    lines.append(
-        "> *Note: This assessment is based on structured data in the Aperture "
-        "knowledge graph. See Verification Notes for identified data gaps.*"
-    )
-    lines.append("")
+    if not client_facing:
+        lines.append(
+            "> *Note: This assessment is based on structured data in the Aperture "
+            "knowledge graph. See Verification Notes for identified data gaps.*"
+        )
+        lines.append("")
 
     if no_claude:
         lines.append("*Analyst assessment skipped (--no-claude flag).*\n")
@@ -1259,14 +1399,52 @@ def build_analyst_assessment(
 
     client = Anthropic(api_key=api_key)
 
+    # SBIR lapse status context
+    lapse_status = ""
+    if conn and entity_id:
+        status = _sbir_lapse_status(conn, entity_id)
+        status_map = {
+            "no_sbir": "This company has no SBIR awards on record.",
+            "active_pre_lapse": (
+                "This company has recent SBIR awards (2024+). Existing awards are "
+                "pre-lapse — work is funded and continuing. However, no new SBIR "
+                "awards will be issued until reauthorization."
+            ),
+            "aging_pre_lapse": (
+                "This company's most recent SBIR is from 2021-2023. It may have "
+                "been expecting SBIR renewal funding that is now disrupted by the lapse."
+            ),
+            "historical": (
+                "This company's SBIR engagement is historical (pre-2021). The lapse "
+                "is unlikely to affect current operations."
+            ),
+        }
+        lapse_status = f"\n\nSBIR LAPSE STATUS FOR THIS COMPANY: {status_map.get(status, '')}"
+
     report_date = date.today().strftime("%B %d, %Y")
-    system_prompt = (
-        "You are an Aperture Signals analyst. Write a concise, professional "
-        "intelligence assessment based on the following data. Be specific. "
-        "Reference numbers. Flag risks honestly. Do not hedge excessively. "
-        f"Today's date is {report_date}. Frame all temporal references accordingly. "
-        "Do not reference past dates as future events."
-    )
+
+    if client_facing:
+        system_prompt = (
+            "You are writing a market intelligence assessment for a defense "
+            "industry professional evaluating business development opportunities. "
+            "Be specific. Reference contract values, funding amounts, and technology "
+            "capabilities. Frame risks as considerations. Avoid referencing internal "
+            "scoring methodology, signal type names, composite scores, or freshness weights. "
+            f"Today's date is {report_date}. Frame all temporal references accordingly. "
+            "Do not reference past dates as future events.\n\n"
+            f"{CLIENT_FACING_ANALYST_CONTEXT}"
+            f"{lapse_status}"
+        )
+    else:
+        system_prompt = (
+            "You are an Aperture Signals analyst. Write a concise, professional "
+            "intelligence assessment based on the following data. Be specific. "
+            "Reference numbers. Flag risks honestly. Do not hedge excessively. "
+            f"Today's date is {report_date}. Frame all temporal references accordingly. "
+            "Do not reference past dates as future events.\n\n"
+            f"{ACQUISITION_REFORM_CONTEXT}"
+            f"{lapse_status}"
+        )
 
     # Build data context from all sections
     context_parts = []
@@ -1274,15 +1452,26 @@ def build_analyst_assessment(
     for section_name, section_md in sections_data.items():
         context_parts.append(f"\n--- {section_name.upper()} ---\n{section_md}")
 
-    user_prompt = (
-        f"Based on the following intelligence data for {entity['canonical_name']}, "
-        f"write an assessment covering:\n"
-        f"1. The investment case (what makes this company interesting)\n"
-        f"2. Key risks (what could go wrong)\n"
-        f"3. What would change the picture (catalysts or red flags to watch for)\n\n"
-        f"Write 2-3 paragraphs. Be direct and data-driven.\n\n"
-        f"{''.join(context_parts)}"
-    )
+    if client_facing:
+        user_prompt = (
+            f"Based on the following data for {entity['canonical_name']}, "
+            f"write a market intelligence assessment covering:\n"
+            f"1. Business opportunity (what makes this company interesting for partnerships/investment)\n"
+            f"2. Key considerations (factors to evaluate)\n"
+            f"3. Near-term outlook (what to watch for)\n\n"
+            f"Write 2-3 paragraphs. Be direct and data-driven.\n\n"
+            f"{''.join(context_parts)}"
+        )
+    else:
+        user_prompt = (
+            f"Based on the following intelligence data for {entity['canonical_name']}, "
+            f"write an assessment covering:\n"
+            f"1. The investment case (what makes this company interesting)\n"
+            f"2. Key risks (what could go wrong)\n"
+            f"3. What would change the picture (catalysts or red flags to watch for)\n\n"
+            f"Write 2-3 paragraphs. Be direct and data-driven.\n\n"
+            f"{''.join(context_parts)}"
+        )
 
     logger.info("Requesting analyst assessment from Claude...")
 
@@ -1305,12 +1494,140 @@ def build_analyst_assessment(
 
 # ── Report assembly ──────────────────────────────────────────────────────
 
+def _build_client_coverage_summary(conn: sqlite3.Connection, entity_id: str) -> str:
+    """Build a simplified data coverage summary for client-facing briefs."""
+    lines = ["## Data Coverage", ""]
+
+    sbir_count = conn.execute(
+        "SELECT COUNT(*) as cnt FROM funding_events WHERE entity_id = ? "
+        "AND event_type IN ('SBIR_PHASE_1','SBIR_PHASE_2','SBIR_PHASE_3')",
+        (entity_id,),
+    ).fetchone()["cnt"]
+
+    contract_count = conn.execute(
+        "SELECT COUNT(*) as cnt FROM contracts WHERE entity_id = ?",
+        (entity_id,),
+    ).fetchone()["cnt"]
+
+    regd_count = conn.execute(
+        "SELECT COUNT(*) as cnt FROM funding_events WHERE entity_id = ? "
+        "AND event_type IN ('REG_D_FILING', 'PRIVATE_ROUND')",
+        (entity_id,),
+    ).fetchone()["cnt"]
+
+    enrichment_count = conn.execute(
+        "SELECT COUNT(*) as cnt FROM enrichment_findings WHERE entity_id = ? "
+        "AND status = 'ingested'",
+        (entity_id,),
+    ).fetchone()["cnt"]
+
+    parts = []
+    if sbir_count:
+        parts.append(f"{sbir_count} SBIR awards")
+    if contract_count:
+        parts.append(f"{contract_count} contracts")
+    if regd_count:
+        parts.append(f"{regd_count} funding events")
+    if enrichment_count:
+        parts.append(f"{enrichment_count} enrichment findings")
+
+    lines.append(f"**Data coverage:** {', '.join(parts) if parts else 'Limited data available'}.")
+    lines.append("")
+    return "\n".join(lines)
+
+
+def _build_key_contacts(conn: sqlite3.Connection, entity_id: str) -> str:
+    """Build Key Contacts & Investor Syndicate section for client-facing briefs."""
+    lines = ["## Key Contacts & Investor Syndicate", ""]
+
+    # Query relationships for investors
+    investors = conn.execute(
+        """SELECT target_name, properties FROM relationships
+           WHERE source_entity_id = ? AND relationship_type = 'INVESTED_IN_BY'
+           ORDER BY weight DESC""",
+        (entity_id,),
+    ).fetchall()
+
+    if investors:
+        lines.append("**Known Investors:**")
+        lines.append("")
+        for inv in investors:
+            lines.append(f"- {inv['target_name']}")
+        lines.append("")
+    else:
+        lines.append("*Investor syndicate data can be populated via enrichment (`--enrich`).*")
+        lines.append("")
+
+    # Check for partnership relationships
+    partners = conn.execute(
+        """SELECT target_name, properties FROM relationships
+           WHERE source_entity_id = ? AND relationship_type NOT IN ('INVESTED_IN_BY', 'MERGED_INTO')
+           ORDER BY weight DESC LIMIT 10""",
+        (entity_id,),
+    ).fetchall()
+
+    if partners:
+        lines.append("**Strategic Relationships:**")
+        lines.append("")
+        for p in partners:
+            lines.append(f"- {p['target_name']}")
+        lines.append("")
+
+    return "\n".join(lines)
+
+
+def _truncate_comparables(md_text: str, max_comps: int = 5) -> str:
+    """Truncate comparables table to top N entries and remove detailed profiles."""
+    lines = md_text.split("\n")
+    output = []
+    table_row_count = 0
+    in_table = False
+    skip_rest = False
+
+    for line in lines:
+        if skip_rest:
+            continue
+
+        # Detect table start
+        if line.strip().startswith("| #"):
+            in_table = True
+            output.append(line)
+            continue
+
+        # Table separator
+        if in_table and re.match(r'^\|[-:\s|]+\|$', line.strip()):
+            output.append(line)
+            continue
+
+        # Table data rows
+        if in_table and line.strip().startswith("|"):
+            table_row_count += 1
+            if table_row_count <= max_comps:
+                output.append(line)
+            if table_row_count == max_comps:
+                in_table = False
+                output.append("")
+            continue
+
+        # Skip "Top 5 Comparable Profiles" and "Market Benchmarks" sub-sections
+        if line.strip().startswith("### Top 5 Comparable") or line.strip().startswith("### Market Benchmarks"):
+            skip_rest = True
+            continue
+
+        if not in_table:
+            output.append(line)
+
+    return "\n".join(output)
+
+
 def generate_deal_brief(
     entity_name: str,
     output_path: str | None = None,
     no_claude: bool = False,
     no_verify: bool = False,
     pdf: bool = False,
+    client_facing: bool = False,
+    enrich: bool = False,
 ) -> str:
     """Generate a full deal intelligence brief for the given entity."""
     conn = _connect()
@@ -1325,7 +1642,32 @@ def generate_deal_brief(
     name = entity["canonical_name"]
     report_date = date.today().strftime("%B %d, %Y")
 
-    print(f"Generating deal brief for: {name}")
+    # Inline enrichment
+    if enrich:
+        api_key = settings.ANTHROPIC_API_KEY
+        if not api_key:
+            print("  Error: --enrich requires ANTHROPIC_API_KEY in .env. Skipping enrichment.")
+        else:
+            print(f"Running web enrichment for {name}...")
+            try:
+                from scripts.enrich_entity import enrich_single, _connect as _enrich_connect
+                enrich_conn = _enrich_connect()
+                enrich_single(enrich_conn, name, auto_approve=True)
+                enrich_conn.close()
+                # Re-fetch entity after enrichment may have added data
+                entity = lookup_entity(conn, entity_name)
+                entity_id = entity["id"]
+                print(f"  Enrichment complete.")
+            except ImportError:
+                print("  Warning: enrich_entity module not available, skipping enrichment")
+            except Exception as e:
+                if "connection" in str(e).lower() or "network" in str(e).lower():
+                    print(f"  Error: Enrichment requires network access for web search. ({e})")
+                else:
+                    print(f"  Warning: Enrichment failed ({e}), proceeding with existing data")
+
+    mode_label = "client-facing brief" if client_facing else "deal brief"
+    print(f"Generating {mode_label} for: {name}")
 
     # Build all sections
     sections = {}
@@ -1339,35 +1681,58 @@ def generate_deal_brief(
     sections["Private Capital Activity"] = build_private_capital(conn, entity_id)
     print("  [3/9] Private Capital Activity")
 
-    sections["Signal Profile"] = build_signal_profile(conn, entity_id)
-    print("  [4/9] Signal Profile")
+    if not client_facing:
+        sections["Signal Profile"] = build_signal_profile(conn, entity_id)
+        print("  [4/9] Signal Profile")
+    else:
+        print("  [4/9] Signal Profile (skipped — client-facing)")
 
-    sections["Policy Alignment"] = build_policy_alignment(entity)
-    print("  [5/9] Policy Alignment")
+    if not client_facing:
+        sections["Policy Alignment"] = build_policy_alignment(conn, entity_id, entity)
+        print("  [5/9] Policy Alignment")
+    else:
+        print("  [5/9] Policy Alignment (skipped — client-facing)")
 
     sections["Lifecycle Position"] = build_lifecycle_position(conn, entity_id, entity)
     print("  [6/9] Lifecycle Position")
 
-    sections["Comparables Analysis"] = build_comparables(conn, entity_id, entity)
+    comps_md = build_comparables(conn, entity_id, entity)
+    if client_facing:
+        comps_md = _truncate_comparables(comps_md, max_comps=5)
+    sections["Comparables Analysis"] = comps_md
     print("  [7/9] Comparables Analysis")
 
-    sections["Data Coverage & Verification Notes"] = build_verification_notes(
-        conn, entity_id, entity,
-        no_verify=no_verify, no_claude=no_claude,
-    )
-    print("  [8/9] Data Coverage & Verification Notes")
+    if client_facing:
+        sections["Data Coverage"] = _build_client_coverage_summary(conn, entity_id)
+        print("  [8/9] Data Coverage")
+    else:
+        sections["Data Coverage & Verification Notes"] = build_verification_notes(
+            conn, entity_id, entity,
+            no_verify=no_verify, no_claude=no_claude,
+        )
+        print("  [8/9] Data Coverage & Verification Notes")
 
+    # Analyst assessment — adjust prompt for client-facing
     sections["Analyst Assessment"] = build_analyst_assessment(
-        sections, entity, no_claude=no_claude
+        sections, entity,
+        no_claude=no_claude,
+        client_facing=client_facing,
+        conn=conn,
+        entity_id=entity_id,
     )
     print("  [9/9] Analyst Assessment")
 
+    if client_facing:
+        sections["Key Contacts & Investor Syndicate"] = _build_key_contacts(conn, entity_id)
+        print("  [+] Key Contacts & Investor Syndicate")
+
     # Assemble markdown
+    header = f"# Intelligence Brief: {name}" if client_facing else f"# Deal Intelligence Brief: {name}"
     md_parts = [
-        f"# Deal Intelligence Brief: {name}",
+        header,
         "",
         f"**Date:** {report_date}",
-        f"**Query Type:** Deal Analysis",
+        f"**Query Type:** {'Intelligence Analysis' if client_facing else 'Deal Analysis'}",
         "",
         "---",
         "",
@@ -1416,13 +1781,15 @@ def generate_deal_brief(
     # Optional PDF
     if pdf:
         try:
-            from scripts.generate_pdf_report import build_pdf
+            from scripts.generate_deal_brief_pdf import generate_deal_brief_pdf
             pdf_path = out.with_suffix(".pdf")
-            # build_pdf expects prospect-style data; for deal briefs we just
-            # convert the markdown. This is a minimal integration.
-            print(f"PDF generation not yet integrated for deal briefs.")
-        except ImportError:
-            print("PDF generation requires fpdf2. Install with: pip install fpdf2")
+            pages = generate_deal_brief_pdf(
+                sections, entity, pdf_path, client_facing=client_facing,
+            )
+            print(f"PDF written to: {pdf_path} ({pages} pages)")
+        except Exception as e:
+            logger.error("PDF generation failed: %s", e)
+            print(f"PDF generation failed: {e}")
 
     conn.close()
     return str(out)
@@ -1466,6 +1833,14 @@ Examples:
         help="Skip web verification step",
     )
     parser.add_argument(
+        "--client-facing", action="store_true",
+        help="Generate client-facing variant (strips internal sections, adds contacts)",
+    )
+    parser.add_argument(
+        "--enrich", action="store_true",
+        help="Run web enrichment before generating brief (auto-approves high-confidence findings)",
+    )
+    parser.add_argument(
         "--verbose", "-v", action="store_true",
         help="Enable verbose logging",
     )
@@ -1484,6 +1859,8 @@ Examples:
             no_claude=args.no_claude,
             no_verify=args.no_verify,
             pdf=args.pdf,
+            client_facing=args.client_facing,
+            enrich=args.enrich,
         )
 
 

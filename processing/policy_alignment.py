@@ -108,16 +108,21 @@ class PolicyPriority(Enum):
 
 # Budget growth weights from YAML config
 # Values calibrated from actual FY25→FY26 budget data
+# Handle v2 format (nested under budget_priorities) and v1 (nested under priorities)
+_PRIORITIES = _CONFIG.get("budget_priorities", _CONFIG.get("priorities", {}))
+
 BUDGET_GROWTH_WEIGHTS = {
     PolicyPriority(name): data["weight"]
-    for name, data in _CONFIG["priorities"].items()
+    for name, data in _PRIORITIES.items()
+    if isinstance(data, dict) and "weight" in data
 }
 
 
 # Priority area descriptions for the LLM prompt (loaded from YAML)
 PRIORITY_DESCRIPTIONS = {
     PolicyPriority(name): data["description"].strip()
-    for name, data in _CONFIG["priorities"].items()
+    for name, data in _PRIORITIES.items()
+    if isinstance(data, dict) and "description" in data
 }
 
 

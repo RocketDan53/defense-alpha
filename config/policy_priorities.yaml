@@ -1,183 +1,452 @@
-# =============================================================================
-# POLICY PRIORITIES CONFIGURATION
-# =============================================================================
-# Weights calibrated from actual DoD budget growth rates.
-# Used by processing/policy_alignment.py to calculate policy_tailwind scores.
+# Aperture Signals — Policy Priority Configuration v2
+# Updated: February 27, 2026
 #
-# Data Source: FY2026 President's Budget Request (June 2025)
-# Last Calibrated: February 2026
-# Next Update Due: FY2027 PBR (expected February 2027)
+# CHANGE LOG:
+#   v1 (Feb 2026): 10 budget-derived priority areas with FY26 growth weights
+#   v2 (Feb 2026): Added acquisition_framework layer for MEIA/KOP/JAR/PAE alignment
+#                  Budget weights preserved as baseline; KOP weights override when active
 #
-# Sources:
-#   - DoD Comptroller: comptroller.defense.gov/Budget-Materials/Budget2026/
-#   - CRS Reports: congress.gov/crs-product/IN12616, R45811
-#   - Arms Control Center FY26 Briefing Book
-#   - SpacePolicyOnline, DefenseScoop budget analysis
+# ARCHITECTURE:
+#   The scoring system now operates in two layers:
+#     Layer 1 (budget_priorities): Existing FY26 budget-growth weights — always active
+#     Layer 2 (acquisition_framework): MEIA/KOP/JAR alignment — activates as data becomes available
+#
+#   When both layers are active:
+#     policy_tailwind_score = 0.6 * budget_tailwind + 0.4 * acquisition_tailwind
+#
+#   When only Layer 1 is active (current state):
+#     policy_tailwind_score = budget_tailwind (unchanged from v1)
+#
+# The acquisition_framework layer is forward-looking. Signal types and KOP definitions
+# are stubbed now and activate when MEIA experimentation data becomes publicly trackable.
+# ---
+
+version: 2
+
 # =============================================================================
+# LAYER 1: Budget-Derived Priority Areas (unchanged from v1)
+# =============================================================================
+# Source: FY25 → FY26 President's Budget Request growth rates
+# Formula: sum(score * budget_weight) / sum(budget_weight) for priorities where score > 0.2
 
-# Budget growth weights (FY25 enacted → FY26 request)
-# Values represent multiplier: 1.22 = +22% YoY growth
-# Higher weight = stronger "policy tailwind" for companies aligned to that area
-
-priorities:
-
+budget_priorities:
   space_resilience:
-    weight: 1.38
-    growth_actual: "+38%"
+    weight: 0.235
+    fy26_growth: "+38%"
     description: >
-      Space domain awareness, satellite protection, responsive launch,
-      proliferated LEO constellations, SATCOM, GPS alternatives,
-      on-orbit servicing, counter-space capabilities.
-    notes: "Driven by Golden Dome missile defense initiative. Space Force fastest-growing service."
-    fy26_budget: "$39.9B (with reconciliation)"
+      Space-based capabilities, satellite resilience, space domain awareness,
+      on-orbit servicing, space launch, counter-space, ground segment hardening,
+      LEO/MEO constellation proliferation, space-based ISR, PNT alternatives
+    keywords:
+      - satellite
+      - space domain awareness
+      - on-orbit servicing
+      - counter-space
+      - space launch
+      - constellation
+      - LEO
+      - cislunar
+      - space resilience
+      - GPS alternative
+      - PNT
 
   nuclear_modernization:
-    weight: 1.26
-    growth_actual: "+26%"
+    weight: 0.170
+    fy26_growth: "+17%"
     description: >
-      Technologies supporting Sentinel ICBM, Columbia-class SSBN, B-21 bomber,
-      nuclear C3, warhead modernization, strategic deterrence.
-    notes: "Sentinel +105%, B-21 +94%, Columbia +14%. Total nuclear enterprise $87B."
-    fy26_budget: "$87B total nuclear enterprise"
+      Nuclear triad modernization (Sentinel ICBM, Columbia SSBN, B-21),
+      nuclear command and control (NC3), nuclear surety, warhead life extension,
+      NNSA programs, nuclear enterprise digital engineering
+    keywords:
+      - nuclear
+      - ICBM
+      - SSBN
+      - B-21
+      - NC3
+      - warhead
+      - tritium
+      - nuclear command
 
   autonomous_systems:
-    weight: 1.22
-    growth_actual: "+22%"
+    weight: 0.130
+    fy26_growth: "+10%"
     description: >
-      Unmanned air/ground/maritime vehicles (UAS/UAV/drones, UGV, USV, UUV),
-      AI-enabled autonomy, human-machine teaming, swarming, loyal wingman,
-      autonomous logistics, counter-UAS systems and drone defense,
-      Group 1-5 UAS platforms, Replicator-relevant attritable autonomous systems.
-    notes: "First year DoD broke out autonomy as dedicated budget line. Navy +$2.2B alone."
-    fy26_budget: "$13.4B"
+      Unmanned/autonomous systems across all domains — UAS/UAV/drones (Group 1-5),
+      counter-UAS/C-UAS, UGV, USV, UUV, autonomous navigation, swarm technology,
+      attritable/expendable platforms, collaborative combat aircraft (CCA),
+      autonomy software, human-machine teaming, AI-enabled mission systems,
+      loitering munitions, tactical ISR drones, drone-in-a-box
+    keywords:
+      - UAS
+      - UAV
+      - drone
+      - counter-UAS
+      - C-UAS
+      - autonomous
+      - unmanned
+      - UGV
+      - USV
+      - UUV
+      - swarm
+      - attritable
+      - CCA
+      - loitering munition
 
   supply_chain_resilience:
-    weight: 1.15
-    growth_actual: "estimate"
+    weight: 0.110
+    fy26_growth: "+7%"
     description: >
-      Domestic semiconductor manufacturing, rare earth alternatives,
-      additive manufacturing, defense industrial base strengthening,
-      trusted microelectronics, reshoring critical components.
-    notes: "CHIPS Act $2B DoD allocation ongoing. Hard to isolate YoY in single budget line."
-    fy26_budget: "$2B CHIPS + fragmented DIB investments"
+      Defense industrial base resilience, critical mineral sourcing, domestic
+      manufacturing, microelectronics/CHIPS Act alignment, energetics/munitions
+      production, castings and forgings, submarine supplier base, second-source
+      qualification, DMEA trusted foundry
+    keywords:
+      - supply chain
+      - domestic manufacturing
+      - microelectronics
+      - munitions production
+      - energetics
+      - critical minerals
+      - second source
+      - trusted foundry
 
   contested_logistics:
-    weight: 1.12
-    growth_actual: "estimate"
+    weight: 0.100
+    fy26_growth: "+10%"
     description: >
-      Expeditionary Advanced Base Operations (EABO), distributed maritime ops,
-      agile combat employment, contested resupply, forward arming/refueling,
-      austere basing, Indo-Pacific logistics infrastructure.
-    notes: "Fragmented across Navy/Marines/Air Force. Growing priority but no clean budget line."
-    fy26_budget: "Fragmented - see PDI $10B, MILCON, service O&M"
+      Logistics under fire, distributed maritime operations, expeditionary
+      advanced base operations, fuel/energy resilience, autonomous resupply,
+      additive manufacturing in theater, predictive maintenance, contested
+      aerial refueling
+    keywords:
+      - contested logistics
+      - distributed operations
+      - expeditionary
+      - autonomous resupply
+      - predictive maintenance
+      - additive manufacturing
 
   electronic_warfare:
-    weight: 1.10
-    growth_actual: "estimate"
+    weight: 0.085
+    fy26_growth: "+10%"
     description: >
-      Radar jamming, communications jamming, spectrum management,
-      EMSO, SIGINT, electronic attack/protection, counter-drone EW.
-    notes: "No consolidated EW budget line. Next-Gen Jammer, EWPMT spread across services."
-    fy26_budget: "Fragmented across services"
+      Electronic attack/protect/support, spectrum operations, cognitive EW,
+      signals intelligence, electronic countermeasures, anti-jam communications,
+      RF sensing, electromagnetic spectrum superiority, GPS-denied operations,
+      navigation warfare
+    keywords:
+      - electronic warfare
+      - EW
+      - spectrum
+      - cognitive EW
+      - anti-jam
+      - SIGINT
+      - electromagnetic
+      - GPS-denied
+      - NAVWAR
 
   jadc2:
-    weight: 1.10
-    growth_actual: "estimate"
+    weight: 0.075
+    fy26_growth: "+10%"
     description: >
-      Joint All-Domain Command and Control - seamless data sharing,
-      sensor-to-shooter integration, mesh networks, data fusion,
-      AI-enabled battle management, interoperability.
-    notes: "ABMS is only clean budget line (~$300M). True JADC2 spending is $2-3B but distributed."
-    fy26_budget: "~$2-3B estimated (fragmented)"
+      Joint All-Domain Command and Control, data mesh/fabric, tactical edge
+      computing, cross-domain solutions, Link 16 modernization, ABMS, Project
+      Overmatch, battle management, kill chain integration, sensor-to-shooter,
+      mission partner environment
+    keywords:
+      - JADC2
+      - command and control
+      - data mesh
+      - tactical edge
+      - ABMS
+      - kill chain
+      - sensor to shooter
 
   border_homeland:
-    weight: 1.05
-    growth_actual: "estimate"
+    weight: 0.050
+    fy26_growth: "+10%"
     description: >
-      Border surveillance and detection, counter-UAS, CBRN detection,
-      critical infrastructure protection, port/maritime security,
-      biometrics, threat interdiction.
-    notes: "DHS reconciliation added $2.7B for surveillance tech. CBP total $23B."
-    fy26_budget: "$23B CBP + $2.7B reconciliation tech"
+      Border security technology, CBP/DHS systems, wide-area surveillance,
+      biometrics, counter-narcotic technology, tunnel detection, maritime
+      domain awareness for homeland defense
+    keywords:
+      - border security
+      - CBP
+      - biometrics
+      - wide-area surveillance
+      - counter-narcotic
 
   cyber_offense_defense:
-    weight: 1.04
-    growth_actual: "+4.1%"
+    weight: 0.030
+    fy26_growth: "+10%"
     description: >
-      Offensive cyber tools, network defense, zero trust architecture,
-      software supply chain security, AI-enabled threat detection,
-      critical infrastructure protection, cryptography.
-    notes: "Steady growth despite rhetoric. CYBERCOM ~$2.6B of $15.1B total cyber."
-    fy26_budget: "$15.1B total cyberspace activities"
+      Offensive/defensive cyber operations, cyber mission force tools,
+      zero trust architecture, software supply chain security, AI-enabled
+      cyber defense, hunt forward operations, CMMC compliance tools
+    keywords:
+      - cyber
+      - zero trust
+      - CMMC
+      - cyber defense
+      - hunt forward
 
   hypersonics:
-    weight: 0.57
-    growth_actual: "-43%"
+    weight: 0.015
+    fy26_growth: "-43%"
     description: >
-      Hypersonic weapons (boost-glide, cruise), hypersonic defense,
-      thermal protection, scramjet propulsion, high-speed materials,
-      tracking/targeting of hypersonic threats.
-    notes: "Declining RDT&E as programs mature and transition to production. HACM $803M."
-    fy26_budget: "$3.9B (down from $6.9B)"
-
+      Hypersonic strike, boost-glide vehicles, scramjet propulsion,
+      hypersonic defense/intercept, thermal protection, flight test
+      infrastructure. NOTE: Budget declining significantly.
+    keywords:
+      - hypersonic
+      - scramjet
+      - boost-glide
+      - Mach 5
 
 # =============================================================================
-# GEOGRAPHIC/STRATEGIC MODIFIERS
+# LAYER 2: Acquisition Framework Alignment (NEW — MEIA/KOP/JAR/PAE)
 # =============================================================================
-# These are boolean tags applied alongside priority scores.
-# Not weighted - used for filtering and segmentation.
+# Source: Hegseth-Feinberg memo (Aug 20, 2025), SPEED Act, FoRGED Act, FY26 NDAA
+#
+# STATUS: Partially active. Structural definitions are live; KOP list and MEIA
+# experimentation data are pending public release. The system stubs these now and
+# activates scoring when data sources come online.
+#
+# SCORING:
+#   acquisition_tailwind = weighted sum of:
+#     kop_alignment (0.40)    — alignment to ranked Key Operational Problems
+#     pathway_position (0.30) — position in MEIA→JAR→PAE pipeline
+#     commercial_fit (0.15)   — "presumption of commerciality" readiness
+#     reform_tailwind (0.15)  — benefits from specific NDAA provisions
 
-modifiers:
+acquisition_framework:
+  status: "partial"  # "partial" = structural defs only; "active" = KOP list ingested
+  effective_date: "2025-08-20"  # Hegseth-Feinberg memo date
+  implementation_deadline: "2025-12-18"  # 120 days for JCIDS disestablishment
 
-  pacific_relevance:
+  # When acquisition_framework.status == "active", blend with budget_priorities:
+  blending:
+    budget_weight: 0.60
+    acquisition_weight: 0.40
+
+  # ---------------------------------------------------------------------------
+  # Key Operational Problems (KOPs)
+  # ---------------------------------------------------------------------------
+  # JROC ranks KOPs each budget cycle. When the ranked list is published,
+  # ingest it here. Each KOP gets a rank-derived weight (rank 1 = highest).
+  #
+  # PLACEHOLDER: These are derived from public statements, NDS priorities, and
+  # combatant command posture statements. Replace with official JROC-ranked list
+  # when published.
+
+  key_operational_problems:
+    status: "estimated"  # "estimated" = inferred from public sources; "official" = JROC-ranked list
+
+    problems:
+      - id: kop_001
+        name: "Defeat massed drone/missile saturation attacks"
+        description: >
+          Counter-UAS and integrated air/missile defense against large-scale
+          coordinated attacks. Includes directed energy, EW-based defeat,
+          kinetic intercept at scale, and sensor fusion for threat discrimination.
+        estimated_rank: 1
+        maps_to_budget_priorities:
+          - autonomous_systems
+          - electronic_warfare
+        technology_indicators:
+          - counter-UAS
+          - directed energy
+          - integrated air defense
+          - swarm defeat
+          - threat discrimination
+
+      - id: kop_002
+        name: "Maintain decision advantage in contested communications"
+        description: >
+          Command and control resilience under jamming, cyber attack, and
+          denied/degraded environments. Includes mesh networking, LPI/LPD comms,
+          autonomous mission execution without connectivity, and alternative PNT.
+        estimated_rank: 2
+        maps_to_budget_priorities:
+          - jadc2
+          - electronic_warfare
+          - space_resilience
+        technology_indicators:
+          - mesh networking
+          - anti-jam
+          - GPS-denied
+          - resilient comms
+          - autonomous navigation
+          - alternative PNT
+
+      - id: kop_003
+        name: "Achieve maritime superiority in Western Pacific"
+        description: >
+          Distributed maritime operations, undersea warfare dominance, anti-ship
+          missile defense, autonomous naval systems, contested logistics at sea,
+          mine warfare, and naval integrated fire control.
+        estimated_rank: 3
+        maps_to_budget_priorities:
+          - contested_logistics
+          - autonomous_systems
+        technology_indicators:
+          - undersea warfare
+          - anti-ship
+          - autonomous naval
+          - mine warfare
+          - distributed maritime
+
+      - id: kop_004
+        name: "Accelerate sensor-to-shooter kill chain to machine speed"
+        description: >
+          End-to-end targeting chain compression from minutes to seconds.
+          AI-enabled target recognition, automated battle management, cross-domain
+          fire coordination, and human-on-the-loop engagement authority.
+        estimated_rank: 4
+        maps_to_budget_priorities:
+          - jadc2
+          - autonomous_systems
+        technology_indicators:
+          - target recognition
+          - battle management
+          - kill chain
+          - fire coordination
+          - AI targeting
+
+      - id: kop_005
+        name: "Sustain forces in contested/denied logistics environments"
+        description: >
+          Forward-deployed sustainment without predictable supply lines. Includes
+          autonomous resupply, additive manufacturing, energy harvesting, water
+          purification, and predictive logistics under fire.
+        estimated_rank: 5
+        maps_to_budget_priorities:
+          - contested_logistics
+          - supply_chain_resilience
+        technology_indicators:
+          - autonomous resupply
+          - additive manufacturing
+          - forward logistics
+          - energy harvesting
+
+      - id: kop_006
+        name: "Protect space-based assets and ensure space domain access"
+        description: >
+          Satellite survivability, space situational awareness, counter-space
+          operations, rapid reconstitution/replenishment, and ground segment
+          resilience against kinetic and non-kinetic threats.
+        estimated_rank: 6
+        maps_to_budget_priorities:
+          - space_resilience
+        technology_indicators:
+          - satellite protection
+          - space situational awareness
+          - rapid reconstitution
+          - counter-space
+
+      - id: kop_007
+        name: "Secure and harden the defense supply chain"
+        description: >
+          Domestic production of critical components, microelectronics assurance,
+          energetics/munitions surge capacity, trusted foundry, and supply chain
+          visibility from raw material to deployed system.
+        estimated_rank: 7
+        maps_to_budget_priorities:
+          - supply_chain_resilience
+        technology_indicators:
+          - microelectronics
+          - munitions production
+          - supply chain visibility
+          - trusted foundry
+          - domestic manufacturing
+
+  # ---------------------------------------------------------------------------
+  # Acquisition Pathway Positions
+  # ---------------------------------------------------------------------------
+  # Companies can be at different stages in the new MEIA→JAR→PAE pipeline.
+  # Each position carries a signal value. Higher positions = stronger signal.
+
+  pathway_stages:
+    - stage: "meia_engaged"
+      description: "Company participating in MEIA experimentation campaign"
+      signal_value: 0.4
+      data_sources:
+        - "MEIA public disclosures (TBD)"
+        - "SAM.gov experimentation awards"
+        - "Web enrichment (press releases, company announcements)"
+
+    - stage: "meia_validated"
+      description: "Company's solution validated through MEIA experimentation"
+      signal_value: 0.7
+      data_sources:
+        - "RRAB decisions (TBD)"
+        - "Web enrichment"
+
+    - stage: "jar_funded"
+      description: "Company received JAR year-of-execution funding"
+      signal_value: 0.9
+      data_sources:
+        - "FPDS/SAM.gov (if JAR awards are trackable)"
+        - "Congressional notifications"
+        - "Web enrichment"
+
+    - stage: "pae_portfolio"
+      description: "Company in a Portfolio Acquisition Executive's portfolio"
+      signal_value: 1.0
+      data_sources:
+        - "PAE portfolio disclosures (TBD)"
+        - "Program of record documentation"
+
+  # ---------------------------------------------------------------------------
+  # Commercial Pathway Indicators
+  # ---------------------------------------------------------------------------
+  # FY26 NDAA establishes "presumption of commerciality" — companies with
+  # commercial products that can serve defense needs get a faster pathway.
+  # This benefits companies that DON'T look like traditional defense contractors.
+
+  commercial_pathway:
     description: >
-      Technology directly applicable to Indo-Pacific operations and
-      China pacing competition. Includes: long-range precision strike,
-      A2/AD counter-capabilities, distributed maritime operations,
-      contested Pacific logistics, Taiwan contingency support.
-    usage: "Tag companies whose SBIR work explicitly addresses Pacific scenarios or China threat."
-    filter_only: true
-    notes: >
-      Replaces standalone 'china_pacing' priority. Pacific relevance is a
-      modifier that can apply to ANY priority area (autonomous systems for
-      Pacific ops, space for Pacific ISR, etc.) rather than a weighted category.
+      Companies leveraging commercial-first acquisition pathway under FY26 NDAA
+      Section 812 (nontraditional defense contractor expansion) and presumption
+      of commerciality provisions. Signals: company has commercial revenue,
+      COTS/MOTS products, and can deliver capability without defense-specific
+      modification.
+    indicators:
+      - "Has commercial revenue outside defense"
+      - "Product is COTS/MOTS adaptable"
+      - "Previously classified as nontraditional defense contractor"
+      - "Used FAR Part 12 commercial item procedures"
 
-  nato_interoperability:
-    description: >
-      Technologies that enhance interoperability with NATO allies,
-      European defense integration, or Ukraine support.
-    usage: "Tag companies with explicit NATO/allied integration focus."
-    filter_only: true
+  # ---------------------------------------------------------------------------
+  # NDAA Reform Provisions (scored as tailwinds/headwinds)
+  # ---------------------------------------------------------------------------
+  reform_provisions:
+    - provision: "TINA threshold raise ($2.5M → $10M)"
+      effective: "2026-07-01"
+      impact: "tailwind"
+      benefits: "Companies with contracts $2.5M-$10M avoid certified cost data"
+      
+    - provision: "CAS threshold raise ($50M → $100M)"
+      effective: "TBD (180 days from enactment)"
+      impact: "tailwind"
+      benefits: "Mid-tier companies avoid full Cost Accounting Standards compliance"
 
-  arctic_operations:
-    description: >
-      Technologies for Arctic/cold weather operations, great power
-      competition in polar regions.
-    usage: "Tag companies with Arctic-specific capabilities."
-    filter_only: true
+    - provision: "Nontraditional defense contractor expansion (Sec 811-812)"
+      effective: "2025-12-18"
+      impact: "tailwind"
+      benefits: "Broader definition of nontraditional, fewer compliance burdens"
 
+    - provision: "Modular open systems approach requirement (Sec 1832)"
+      effective: "2025-12-18"
+      impact: "mixed"
+      benefits: "Favors open-architecture companies; burdens proprietary-locked primes"
 
-# =============================================================================
-# SCORING GUIDANCE
-# =============================================================================
-
-scoring:
-  scale: "0.0 to 1.0"
-  thresholds:
-    none: 0.0           # No relevance to this priority
-    tangential: 0.1-0.3 # General-purpose tech that could apply
-    moderate: 0.4-0.6   # Some awards clearly relevant
-    strong: 0.7-0.8     # Multiple awards directly address priority
-    core_focus: 0.9-1.0 # Company's primary work IS this priority
-
-  guidance: |
-    Be conservative - only score high if SBIR titles clearly demonstrate
-    direct relevance. A company building general software tools should
-    score low on most areas. A company building hypersonic thermal
-    protection should score high on hypersonics, low elsewhere.
-
-  policy_tailwind_calculation: |
-    Composite score = sum(priority_score * priority_weight) / sum(weights)
-    Normalized to 0-1 scale. Higher = better alignment with growth areas.
-    A company scoring high on hypersonics (weight 0.57) contributes less
-    to policy_tailwind than one scoring high on space (weight 1.38).
+    - provision: "SBIR/STTR authorization lapse (Oct 1, 2025)"
+      effective: "2025-10-01"
+      impact: "headwind"
+      benefits: "SBIR pipeline disruption for companies dependent on Phase I/II funding"
+      note: >
+        SBIR/STTR authorizations lapsed Oct 1, 2025 and were NOT reauthorized
+        in FY26 NDAA. This is a significant headwind for early-stage companies
+        in the Aperture universe. Monitor for reauthorization in supplemental
+        legislation. Affects 3,221 companies in the Phase II pipeline.

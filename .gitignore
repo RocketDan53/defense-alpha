@@ -31,5 +31,6 @@ Thumbs.db
 # Project specific
 data/*.db
 data/*.sqlite
+data/ota_extracts/
 logs/
 *.log

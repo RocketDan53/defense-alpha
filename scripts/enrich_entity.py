@@ -147,6 +147,10 @@ For context, our database currently has:
 - {regd_count} Reg D filings (total: {regd_total})
 - Funding rounds on file: {existing_rounds}
 
+Also determine: Is this company publicly traded? If so, note the ticker symbol
+and exchange. Public companies should not be flagged as lacking private capital —
+they have access to public market funding.
+
 Search thoroughly. Report everything you find with specific dollar amounts,
 dates, and sources. Do not speculate.
 """
@@ -209,7 +213,14 @@ Return this exact schema:
       "source_url": "string",
       "confidence": "high|medium|low"
     }}
-  ]
+  ],
+  "public_company": {{
+    "is_public": true or false,
+    "ticker": "string or null - e.g., LUNA",
+    "exchange": "string or null - e.g., NASDAQ",
+    "note": "string or null - e.g., Publicly traded since 2006",
+    "source_url": "string or null"
+  }}
 }}
 
 Rules:
@@ -223,6 +234,8 @@ Rules:
   named source. medium means one is estimated. low means the finding is
   from a single unverified source.
 - OTA awards go in ota_awards, NOT contracts
+- If the company is publicly traded, set public_company.is_public=true with
+  ticker and exchange. If not public or unknown, set is_public=false.
 """
 
 
@@ -417,6 +430,25 @@ def stage_findings(conn, entity_id: str, findings: dict) -> list[str]:
         )
         staged_ids.append(fid)
 
+    # Public company detection
+    pub = findings.get("public_company")
+    if pub and pub.get("is_public"):
+        # Check if already flagged
+        already = conn.execute(
+            "SELECT 1 FROM enrichment_findings WHERE entity_id = ? AND finding_type = 'public_company'",
+            (entity_id,),
+        ).fetchone()
+        if not already:
+            fid = str(uuid.uuid4())
+            conn.execute(
+                "INSERT INTO enrichment_findings (id, entity_id, finding_type, finding_data, source_url, confidence, status, created_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, 'pending', ?)",
+                (fid, entity_id, "public_company", json.dumps(pub),
+                 pub.get("source_url"), "high", now),
+            )
+            staged_ids.append(fid)
+            logger.info("  PUBLIC COMPANY: %s (%s)", pub.get("ticker"), pub.get("exchange"))
+
     conn.commit()
     return staged_ids
 
@@ -529,6 +561,11 @@ def ingest_finding(conn, finding) -> str | None:
              now),
         )
         return record_id
+
+    elif finding["finding_type"] == "public_company":
+        # No separate table — the enrichment_findings record itself is the flag.
+        # Signal detectors check enrichment_findings for public_company type.
+        return finding["id"]
 
     return None
 
@@ -645,40 +682,61 @@ def run_batch(conn, entity_file: str, auto_approve_high: bool = False):
 
 # ── Single entity mode ───────────────────────────────────────────────────
 
-def enrich_single(conn, entity_name: str, auto_approve: bool = False):
-    """Enrich a single entity."""
+def enrich_single(conn, entity_name: str, auto_approve: bool = False) -> dict:
+    """
+    Enrich a single entity.
+
+    Returns: {"entity": name, "status": "success"|"not_found"|"no_findings",
+              "findings": int, "approved": int, "errors": []}
+    """
+    result = {"entity": entity_name, "status": "not_found", "findings": 0,
+              "approved": 0, "rejected": 0, "errors": [],
+              "by_type": {}}
+
     entity = lookup_entity(conn, entity_name)
     if not entity:
-        print(f"Entity '{entity_name}' not found in database.")
-        sys.exit(1)
+        logger.warning("Entity '%s' not found in database.", entity_name)
+        return result
 
     name = entity["canonical_name"]
     entity_id = entity["id"]
+    result["entity"] = name
 
-    print(f"Enriching: {name} ({entity_id})")
+    logger.info("Enriching: %s (%s)", name, entity_id)
 
     existing = gather_existing_data(conn, entity_id)
-    print(f"  Current data: {existing['sbir_count']} SBIRs, {existing['contract_count']} contracts, {existing['regd_count']} Reg D filings")
+    logger.info("  Current data: %d SBIRs, %d contracts, %d Reg D filings",
+                existing['sbir_count'], existing['contract_count'], existing['regd_count'])
 
-    findings = search_and_extract(name, existing)
+    try:
+        findings = search_and_extract(name, existing)
+    except Exception as e:
+        result["status"] = "error"
+        result["errors"].append(str(e))
+        logger.error("  Search failed for %s: %s", name, e)
+        return result
+
     if not findings:
-        print("No findings returned from web search.")
-        return
+        result["status"] = "no_findings"
+        logger.info("  No findings returned from web search.")
+        return result
 
-    # Summary
+    # Count by type
     for category in ["contracts", "funding_rounds", "ota_awards", "partnerships"]:
         items = findings.get(category, [])
         if items:
-            print(f"\n  {category}: {len(items)} finding(s)")
+            result["by_type"][category] = len(items)
+            logger.info("  %s: %d finding(s)", category, len(items))
             for item in items:
                 desc = item.get("description") or item.get("partner_name") or item.get("round_stage") or "?"
                 val = item.get("contract_value") or item.get("amount") or item.get("value")
                 val_str = f" (${float(val)/1e6:.1f}M)" if val else ""
                 conf = item.get("confidence", "?")
-                print(f"    [{conf}] {str(desc)[:70]}{val_str}")
+                logger.info("    [%s] %s%s", conf, str(desc)[:70], val_str)
 
     staged = stage_findings(conn, entity_id, findings)
-    print(f"\n  Staged {len(staged)} findings for review")
+    result["findings"] = len(staged)
+    logger.info("  Staged %d findings for review", len(staged))
 
     if auto_approve and staged:
         auto_count = 0
@@ -698,10 +756,32 @@ def enrich_single(conn, entity_name: str, auto_approve: bool = False):
                 )
                 auto_count += 1
         conn.commit()
-        print(f"  Auto-approved {auto_count} high-confidence findings")
+        result["approved"] = auto_count
+        result["rejected"] = len(staged) - auto_count
+        logger.info("  Auto-approved %d high-confidence findings", auto_count)
         remaining = len(staged) - auto_count
         if remaining > 0:
-            print(f"  {remaining} medium/low-confidence findings need manual review (--review)")
+            logger.info("  %d medium/low-confidence findings need manual review (--review)", remaining)
+
+    result["status"] = "success"
+    return result
+
+
+def enrich_single_entity(entity_name: str, auto_approve: bool = True, conn=None) -> dict:
+    """
+    Convenience wrapper for batch use.
+    Creates its own connection if none provided.
+    Returns: {"entity": name, "status": ..., "findings": int, "approved": int, "errors": []}
+    """
+    close_conn = False
+    if conn is None:
+        conn = _connect()
+        close_conn = True
+    try:
+        return enrich_single(conn, entity_name, auto_approve=auto_approve)
+    finally:
+        if close_conn:
+            conn.close()
 
 
 # ── CLI ──────────────────────────────────────────────────────────────────
@@ -739,7 +819,9 @@ Examples:
         elif args.batch and args.file:
             run_batch(conn, args.file, auto_approve_high=args.auto_approve)
         elif args.entity:
-            enrich_single(conn, args.entity, auto_approve=args.auto_approve)
+            result = enrich_single(conn, args.entity, auto_approve=args.auto_approve)
+            if result["status"] == "not_found":
+                sys.exit(1)
         else:
             parser.print_help()
     finally:

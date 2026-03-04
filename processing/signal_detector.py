@@ -10,17 +10,25 @@ Detects actionable intelligence signals from entity activity patterns:
 - Outsized awards relative to company history
 """
 
+import json
+import logging
+import re
 from datetime import date, timedelta
 from decimal import Decimal
+from pathlib import Path
 from typing import Optional
 
-from sqlalchemy import func, and_, or_
+import yaml
+from sqlalchemy import func, and_, or_, text
 from sqlalchemy.orm import Session
 
 from processing.models import (
     Entity, EntityType, Contract, FundingEvent, FundingEventType,
-    Signal, SignalStatus
+    Signal, SignalStatus, Relationship, RelationshipType,
+    EnrichmentFinding, SbirEmbedding,
 )
+
+logger = logging.getLogger(__name__)
 
 
 # Signal type constants
@@ -45,6 +53,14 @@ SIGNAL_SBIR_STALLED = "sbir_stalled"
 SIGNAL_CUSTOMER_CONCENTRATION = "customer_concentration"
 SIGNAL_GONE_STALE = "gone_stale"
 
+# MEIA/KOP/JAR signal types (acquisition reform)
+SIGNAL_KOP_ALIGNMENT = "kop_alignment"
+SIGNAL_MEIA_EXPERIMENTATION = "meia_experimentation"
+SIGNAL_JAR_FUNDING = "jar_funding"
+SIGNAL_PAE_PORTFOLIO = "pae_portfolio_member"
+SIGNAL_COMMERCIAL_PATHWAY = "commercial_pathway_fit"
+SIGNAL_SBIR_LAPSE_RISK = "sbir_lapse_risk"
+
 # High-priority technology areas for defense
 HIGH_PRIORITY_TECH = {
     "ai_ml", "autonomy", "quantum", "hypersonics", "cyber",
@@ -55,6 +71,139 @@ HIGH_PRIORITY_TECH = {
 HIGH_CONFIDENCE = Decimal("0.90")
 MEDIUM_CONFIDENCE = Decimal("0.75")
 LOW_CONFIDENCE = Decimal("0.60")
+
+# Stop words for SBIR title keyword extraction
+STOP_WORDS = {'the', 'a', 'an', 'and', 'or', 'for', 'of', 'to', 'in', 'on', 'with', 'by',
+              'from', 'at', 'is', 'are', 'was', 'were', 'be', 'been', 'being', 'have', 'has',
+              'had', 'do', 'does', 'did', 'will', 'would', 'could', 'should', 'may', 'might',
+              'shall', 'can', 'need', 'dare', 'ought', 'used', 'this', 'that', 'these', 'those',
+              'phase', 'ii', 'iii', 'i', 'sbir', 'sttr', 'development', 'system', 'systems',
+              'technology', 'advanced', 'based', 'using', 'new', 'novel', 'improved'}
+
+# Abbreviation and synonym mappings for defense/tech domain
+# Each key maps to a set of related terms for bidirectional expansion
+TERM_GROUPS = [
+    {"uas", "uav", "unmanned aerial", "drone", "rpas", "remotely piloted"},
+    {"counter-uas", "c-uas", "counter-drone", "anti-drone", "drone defense", "cuas"},
+    {"ew", "electronic warfare", "electronic countermeasures", "ecm", "electronic attack"},
+    {"directed energy", "directed_energy", "laser weapon", "high-energy laser", "hel", "dew"},
+    {"satcom", "satellite communications", "satellite comms"},
+    {"pnt", "positioning navigation timing", "alternative pnt", "gps-denied navigation"},
+    {"isr", "intelligence surveillance reconnaissance"},
+    {"jadc2", "joint all-domain", "joint all domain command"},
+    {"sda", "space domain awareness", "space situational awareness", "ssa"},
+    {"c2", "command control", "command and control", "battle management"},
+    {"ai", "artificial intelligence", "machine learning", "ml", "ai_ml"},
+    {"sigint", "signals intelligence"},
+    {"lidar", "light detection ranging", "laser radar"},
+    {"mesh networking", "mesh network", "tactical network", "mobile ad-hoc"},
+    {"anti-jam", "jam-resistant", "anti-jamming", "jam resistant"},
+    {"autonomous navigation", "autonomous nav", "gps-denied", "gps denied"},
+    {"swarm", "swarm defeat", "counter-swarm", "massed attack"},
+    {"undersea warfare", "undersea", "submarine", "asw", "anti-submarine"},
+    {"mine warfare", "mine countermeasures", "mcm", "demining"},
+    {"target recognition", "target identification", "automatic target", "atr"},
+    {"kill chain", "kill-chain", "sensor-to-shooter", "sensor to shooter"},
+    {"additive manufacturing", "3d printing", "3-d printing", "am manufacturing"},
+    {"microelectronics", "microchip", "semiconductor", "trusted foundry"},
+    {"munitions", "munitions production", "ammunition", "ordnance"},
+    {"hypersonic", "hypersonics", "hypersonic weapon", "scramjet"},
+    {"cyber", "cybersecurity", "cyber security", "cyber warfare"},
+    {"quantum", "quantum computing", "quantum sensing", "quantum communications"},
+    {"counter-space", "counterspace", "space protection", "satellite protection"},
+    {"autonomous resupply", "autonomous logistics", "unmanned logistics", "unmanned resupply"},
+    {"fire coordination", "fire control", "fires coordination", "coordinated fires"},
+]
+
+# Build bidirectional lookup: any term → all terms in its group
+ABBREV_MAP = {}
+for group in TERM_GROUPS:
+    for term in group:
+        ABBREV_MAP[term] = group - {term}
+
+
+def _expand_with_abbreviations(terms: set) -> set:
+    """Expand a set of terms with synonym/abbreviation mappings."""
+    expanded = set(terms)
+    for term in terms:
+        if term in ABBREV_MAP:
+            for synonym in ABBREV_MAP[term]:
+                expanded.add(synonym)
+                # Also add individual words from multi-word synonyms
+                expanded.update(synonym.split())
+    return expanded
+
+
+def _extract_tech_keywords(title: str) -> set:
+    """Extract meaningful tech keywords from an SBIR award title."""
+    words = re.findall(r'[a-z][a-z-]+', title.lower())
+    keywords = {w for w in words if w not in STOP_WORDS and len(w) > 2}
+    # Also extract uppercase abbreviations (UAS, EW, ISR, etc.) from original title
+    abbrevs = re.findall(r'\b[A-Z][A-Z0-9-]{1,8}\b', title)
+    keywords.update(a.lower() for a in abbrevs)
+    # Extract meaningful bigrams for multi-word concept matching
+    # e.g., "Counter Unmanned Aerial System" → "counter unmanned", "unmanned aerial"
+    filtered = [w for w in words if w not in STOP_WORDS and len(w) > 2]
+    for i in range(len(filtered) - 1):
+        keywords.add(f"{filtered[i]} {filtered[i+1]}")
+    return keywords
+
+
+def _normalize_tag(tag: str) -> set:
+    """Normalize a technology tag into searchable terms.
+
+    'directed_energy' → {'directed_energy', 'directed energy', 'directed', 'energy'}
+    """
+    tag_lower = tag.lower().strip()
+    terms = {tag_lower}
+    # Split underscored tags into space-separated form and individual words
+    if '_' in tag_lower:
+        spaced = tag_lower.replace('_', ' ')
+        terms.add(spaced)
+        terms.update(spaced.split())
+    # Split hyphenated tags into individual words too
+    if '-' in tag_lower:
+        terms.update(tag_lower.replace('-', ' ').split())
+    return terms
+
+
+def _match_indicators(entity_profile: set, indicators: list) -> list:
+    """Match KOP indicators against entity tech profile.
+
+    Supports multi-word indicators via:
+    1. Substring containment on joined profile text
+    2. All meaningful words of indicator present individually (split on spaces AND hyphens)
+    3. Abbreviation expansion (both directions)
+    """
+    # Expand entity profile with abbreviation mappings
+    expanded_profile = _expand_with_abbreviations(entity_profile)
+    profile_text = ' '.join(expanded_profile)
+
+    matches = []
+    for indicator in indicators:
+        indicator_lower = indicator.lower()
+
+        # Expand indicator with abbreviations/synonyms too
+        indicator_expanded = {indicator_lower}
+        if indicator_lower in ABBREV_MAP:
+            indicator_expanded.update(ABBREV_MAP[indicator_lower])
+
+        matched = False
+        for ind_form in indicator_expanded:
+            # Check substring containment
+            if ind_form in profile_text:
+                matched = True
+                break
+            # Check if all meaningful words appear individually
+            # Split on both spaces and hyphens for compound terms like "counter-UAS"
+            ind_words = {w for w in re.split(r'[\s-]+', ind_form) if len(w) > 1}
+            if ind_words and ind_words.issubset(expanded_profile):
+                matched = True
+                break
+
+        if matched:
+            matches.append(indicator)
+    return matches
 
 
 def _dedup_regd_filings(filings):
@@ -111,6 +260,13 @@ class SignalDetector:
             "time_to_contract": self.detect_time_to_contract(),
             "funding_velocity": self.detect_funding_velocity(),
             "gone_stale": self.detect_gone_stale(),
+            # MEIA/KOP/JAR detectors
+            "kop_alignment": self.detect_kop_alignment(),
+            "commercial_pathway": self.detect_commercial_pathway(),
+            "sbir_lapse_risk": self.detect_sbir_lapse_risk(),
+            "meia_experimentation": self.detect_meia_experimentation(),
+            "jar_funding": self.detect_jar_funding(),
+            "pae_portfolio": self.detect_pae_portfolio(),
         }
 
         self.db.commit()
@@ -1355,6 +1511,500 @@ class SignalDetector:
             count += 1
 
         return {"gone_stale_signals": count}
+
+    # ------------------------------------------------------------------
+    # MEIA / KOP / JAR detectors
+    # ------------------------------------------------------------------
+
+    def _load_kops(self) -> list[dict]:
+        """Load Key Operational Problems from policy_priorities.yaml."""
+        config_path = Path(__file__).parent.parent / "config" / "policy_priorities.yaml"
+        try:
+            with open(config_path) as f:
+                config = yaml.safe_load(f)
+            af = config.get("acquisition_framework", {})
+            kops = af.get("key_operational_problems", {})
+            return kops.get("problems", [])
+        except Exception as e:
+            logger.warning(f"Could not load KOPs from config: {e}")
+            return []
+
+    def detect_kop_alignment(self) -> dict:
+        """
+        Detect entity alignment to Key Operational Problems.
+
+        Uses technology_tags + SBIR titles to match against KOP technology_indicators.
+        Confidence scales with KOP rank (rank 1 = 1.0, rank 7 = 0.4).
+        """
+        kops = self._load_kops()
+        if not kops:
+            return {"kop_alignment_signals": 0, "note": "No KOPs loaded"}
+
+        count = 0
+        entities = self.db.query(Entity).filter(
+            Entity.entity_type == EntityType.STARTUP,
+            Entity.merged_into_id.is_(None),
+        ).all()
+
+        for entity in entities:
+            # Build entity tech profile from tags (normalized)
+            tech_profile = set()
+            if entity.technology_tags:
+                try:
+                    tags = json.loads(entity.technology_tags) if isinstance(entity.technology_tags, str) else entity.technology_tags
+                    for t in tags:
+                        tech_profile.update(_normalize_tag(t))
+                except (json.JSONDecodeError, TypeError):
+                    pass
+
+            # Add keywords from SBIR titles via sbir_embeddings table
+            sbir_titles = self.db.query(SbirEmbedding.award_title).filter(
+                SbirEmbedding.entity_id == entity.id,
+            ).all()
+
+            for (title,) in sbir_titles:
+                if title:
+                    tech_profile.update(_extract_tech_keywords(title))
+
+            if not tech_profile:
+                continue
+
+            # Score against each KOP using multi-word indicator matching
+            best_kop = None
+            best_score = 0.0
+            best_matches = []
+
+            for kop in kops:
+                indicators = kop.get("technology_indicators", [])
+                if not indicators:
+                    continue
+                matches = _match_indicators(tech_profile, indicators)
+                if not matches:
+                    continue
+                score = len(matches) / len(indicators)
+
+                # Rank multiplier: rank 1 = 1.0, rank 7 = 0.4
+                rank = kop.get("estimated_rank", 7)
+                rank_multiplier = 1.0 - (rank - 1) * 0.05  # rank 1=1.0, rank 7=0.7
+                adjusted_score = score * max(rank_multiplier, 0.1)
+
+                if adjusted_score > best_score:
+                    best_score = adjusted_score
+                    best_kop = kop
+                    best_matches = matches
+
+            if best_score >= 0.25 and best_kop:
+                self._create_or_update_signal(
+                    entity_id=entity.id,
+                    signal_type=SIGNAL_KOP_ALIGNMENT,
+                    confidence=Decimal(str(min(best_score, 1.0))),
+                    detected_date=date.today(),
+                    evidence={
+                        "kop_id": best_kop.get("id"),
+                        "kop_name": best_kop.get("name"),
+                        "kop_rank": best_kop.get("estimated_rank"),
+                        "kop_status": "estimated",
+                        "matching_indicators": sorted(best_matches),
+                        "alignment_score": round(best_score, 3),
+                        "tech_profile_size": len(tech_profile),
+                        "source": "technology_tags + sbir_titles",
+                    },
+                )
+                count += 1
+
+        return {"kop_alignment_signals": count}
+
+    def detect_meia_experimentation(self) -> dict:
+        """
+        Detect company participation in MEIA experimentation campaigns.
+
+        Phase 1: Detected via enrichment_findings tagged as MEIA/experimentation.
+        Phase 2: Detected via structured MEIA disclosure data when available.
+        """
+        count = 0
+
+        # Check enrichment_findings for MEIA-related evidence
+        meia_findings = (
+            self.db.query(EnrichmentFinding)
+            .filter(
+                EnrichmentFinding.status == "ingested",
+                or_(
+                    EnrichmentFinding.finding_type == "meia_participation",
+                    EnrichmentFinding.finding_data.contains("MEIA"),
+                    EnrichmentFinding.finding_data.contains("experimentation campaign"),
+                    EnrichmentFinding.finding_data.contains("mission engineering"),
+                ),
+            )
+            .all()
+        )
+
+        seen_entities = set()
+        for finding in meia_findings:
+            if finding.entity_id in seen_entities:
+                continue
+            seen_entities.add(finding.entity_id)
+
+            confidence_map = {"high": Decimal("0.90"), "medium": Decimal("0.70"), "low": Decimal("0.50")}
+            confidence = confidence_map.get(finding.confidence, Decimal("0.60"))
+
+            try:
+                data = json.loads(finding.finding_data) if isinstance(finding.finding_data, str) else (finding.finding_data or {})
+            except (json.JSONDecodeError, TypeError):
+                data = {}
+
+            self._create_or_update_signal(
+                entity_id=finding.entity_id,
+                signal_type=SIGNAL_MEIA_EXPERIMENTATION,
+                confidence=confidence,
+                detected_date=date.today(),
+                evidence={
+                    "source": "web_enrichment",
+                    "source_url": finding.source_url,
+                    "campaign_name": data.get("campaign_name"),
+                    "kop_alignment": data.get("kop_id"),
+                    "date": data.get("date"),
+                    "details": data.get("description", ""),
+                },
+            )
+            count += 1
+
+        return {"meia_experimentation_signals": count}
+
+    def detect_jar_funding(self) -> dict:
+        """
+        Detect JAR (Joint Acceleration Reserve) funding.
+
+        Checks contracts table for JAR-tagged awards, then falls back to
+        enrichment findings.
+        """
+        count = 0
+
+        # Check contracts for JAR awards
+        jar_contracts = (
+            self.db.query(Contract.entity_id, Contract.contract_value, Contract.award_date, Contract.contracting_agency)
+            .filter(
+                or_(
+                    Contract.procurement_type == "jar",
+                    Contract.contract_type.ilike("%joint acceleration%"),
+                ),
+            )
+            .all()
+        )
+
+        seen_entities = set()
+        for entity_id, value, award_date, agency in jar_contracts:
+            if entity_id in seen_entities:
+                continue
+            seen_entities.add(entity_id)
+
+            self._create_or_update_signal(
+                entity_id=entity_id,
+                signal_type=SIGNAL_JAR_FUNDING,
+                confidence=Decimal("0.95"),
+                detected_date=award_date or date.today(),
+                evidence={
+                    "source": "contracts_db",
+                    "value": str(value) if value else None,
+                    "date": str(award_date) if award_date else None,
+                    "agency": agency,
+                },
+            )
+            count += 1
+
+        # Fallback: enrichment findings
+        jar_findings = (
+            self.db.query(EnrichmentFinding)
+            .filter(
+                EnrichmentFinding.status == "ingested",
+                or_(
+                    EnrichmentFinding.finding_type == "jar_funding",
+                    EnrichmentFinding.finding_data.contains("Joint Acceleration Reserve"),
+                    EnrichmentFinding.finding_data.contains("JAR fund"),
+                ),
+            )
+            .all()
+        )
+
+        for finding in jar_findings:
+            if finding.entity_id in seen_entities:
+                continue
+            seen_entities.add(finding.entity_id)
+
+            confidence_map = {"high": Decimal("0.90"), "medium": Decimal("0.70"), "low": Decimal("0.50")}
+            confidence = confidence_map.get(finding.confidence, Decimal("0.60"))
+
+            try:
+                data = json.loads(finding.finding_data) if isinstance(finding.finding_data, str) else (finding.finding_data or {})
+            except (json.JSONDecodeError, TypeError):
+                data = {}
+
+            self._create_or_update_signal(
+                entity_id=finding.entity_id,
+                signal_type=SIGNAL_JAR_FUNDING,
+                confidence=confidence,
+                detected_date=date.today(),
+                evidence={
+                    "source": "web_enrichment",
+                    "source_url": finding.source_url,
+                    "value": data.get("value"),
+                    "date": data.get("date"),
+                    "details": data.get("description", ""),
+                },
+            )
+            count += 1
+
+        return {"jar_funding_signals": count}
+
+    def detect_pae_portfolio(self) -> dict:
+        """
+        Detect inclusion in a Portfolio Acquisition Executive's portfolio.
+
+        Checks relationships table for IN_PAE_PORTFOLIO edges.
+        """
+        count = 0
+
+        try:
+            pae_rels = (
+                self.db.query(Relationship)
+                .filter(Relationship.relationship_type == RelationshipType.IN_PAE_PORTFOLIO)
+                .all()
+            )
+        except Exception:
+            # RelationshipType may not have IN_PAE_PORTFOLIO yet
+            return {"pae_portfolio_signals": 0, "note": "IN_PAE_PORTFOLIO relationship type not available"}
+
+        seen_entities = set()
+        for rel in pae_rels:
+            if rel.source_entity_id in seen_entities:
+                continue
+            seen_entities.add(rel.source_entity_id)
+
+            props = rel.properties or {}
+
+            self._create_or_update_signal(
+                entity_id=rel.source_entity_id,
+                signal_type=SIGNAL_PAE_PORTFOLIO,
+                confidence=Decimal("0.85"),
+                detected_date=date.today(),
+                evidence={
+                    "pae_name": rel.target_name,
+                    "portfolio_area": props.get("portfolio_area"),
+                    "source": props.get("source", "web_enrichment"),
+                },
+            )
+            count += 1
+
+        return {"pae_portfolio_signals": count}
+
+    def detect_commercial_pathway(self) -> dict:
+        """
+        Detect companies positioned for the "presumption of commerciality"
+        pathway under FY26 NDAA.
+
+        Scores based on: commercial keywords in business description,
+        dual traction (SBIR + private capital), multi-source funding
+        (contracts + private capital), and dual-use technology tags.
+        """
+        count = 0
+        commercial_keywords = [
+            "commercial", "cots", "dual-use", "civilian",
+            "enterprise", "saas", "commercial off-the-shelf",
+            "dual use", "commercial product",
+        ]
+        dual_use_tag_keywords = ["commercial", "dual-use", "enterprise", "saas", "cloud"]
+
+        entities = self.db.query(Entity).filter(
+            Entity.entity_type == EntityType.STARTUP,
+            Entity.merged_into_id.is_(None),
+        ).all()
+
+        for entity in entities:
+            # Skip entities without business reasoning
+            if not entity.core_business_reasoning:
+                continue
+
+            indicators = []
+            score = 0.0
+
+            # Check business description for commercial keywords (+0.2 each, cap 0.4)
+            business_desc = entity.core_business_reasoning.lower()
+            keyword_score = 0.0
+            for kw in commercial_keywords:
+                if kw in business_desc:
+                    indicators.append(f"Business description mentions '{kw}'")
+                    keyword_score += 0.2
+                    if keyword_score >= 0.4:
+                        break
+            score += min(keyword_score, 0.4)
+
+            # Check for both SBIR AND private capital (dual traction: +0.3)
+            sbir_count = self.db.query(func.count(FundingEvent.id)).filter(
+                FundingEvent.entity_id == entity.id,
+                FundingEvent.event_type.in_([
+                    FundingEventType.SBIR_PHASE_1,
+                    FundingEventType.SBIR_PHASE_2,
+                    FundingEventType.SBIR_PHASE_3,
+                ]),
+            ).scalar() or 0
+
+            regd_count = self.db.query(func.count(FundingEvent.id)).filter(
+                FundingEvent.entity_id == entity.id,
+                FundingEvent.event_type.in_([
+                    FundingEventType.REG_D_FILING,
+                    FundingEventType.PRIVATE_ROUND,
+                ]),
+            ).scalar() or 0
+
+            if sbir_count > 0 and regd_count > 0:
+                indicators.append(f"Dual traction: {sbir_count} SBIRs + {regd_count} private rounds")
+                score += 0.3
+
+            # Check for contracts AND private capital (multi-source: +0.2)
+            contract_count = self.db.query(func.count(Contract.id)).filter(
+                Contract.entity_id == entity.id,
+            ).scalar() or 0
+
+            if contract_count > 0 and regd_count > 0:
+                indicators.append("Has both contracts and private capital")
+                score += 0.2
+
+            # Check technology_tags for dual-use indicators (+0.1 each, cap 0.2)
+            tag_score = 0.0
+            if entity.technology_tags:
+                try:
+                    tags = json.loads(entity.technology_tags) if isinstance(entity.technology_tags, str) else entity.technology_tags
+                    if tags:
+                        for tag in tags:
+                            tag_lower = tag.lower()
+                            for dukw in dual_use_tag_keywords:
+                                if dukw in tag_lower:
+                                    tag_score += 0.1
+                                    break
+                            if tag_score >= 0.2:
+                                break
+                except (json.JSONDecodeError, TypeError):
+                    pass
+            score += min(tag_score, 0.2)
+
+            if score >= 0.4 and indicators:
+                self._create_or_update_signal(
+                    entity_id=entity.id,
+                    signal_type=SIGNAL_COMMERCIAL_PATHWAY,
+                    confidence=Decimal(str(min(score, 1.0))),
+                    detected_date=date.today(),
+                    evidence={
+                        "commercial_score": round(score, 2),
+                        "indicators": indicators,
+                        "sbir_count": sbir_count,
+                        "regd_count": regd_count,
+                        "contract_count": contract_count,
+                        "note": "FY26 NDAA presumption of commerciality benefits this company",
+                    },
+                )
+                count += 1
+
+        return {"commercial_pathway_signals": count}
+
+    def detect_sbir_lapse_risk(self) -> dict:
+        """
+        Detect companies at risk from SBIR/STTR authorization lapse.
+
+        Fires for companies where SBIR is >70% of total government funding
+        AND they have no significant private capital (< $1M Reg D).
+        """
+        count = 0
+
+        # Subquery for superseded funding events (same pattern as aperture_query.py)
+        superseded_ids = self.db.query(FundingEvent.parent_event_id).filter(
+            FundingEvent.parent_event_id.isnot(None)
+        )
+
+        entities = self.db.query(Entity).filter(
+            Entity.entity_type == EntityType.STARTUP,
+            Entity.merged_into_id.is_(None),
+        ).all()
+
+        for entity in entities:
+            # SBIR total and count (exclude superseded)
+            sbir_agg = self.db.query(
+                func.coalesce(func.sum(FundingEvent.amount), 0),
+                func.count(FundingEvent.id),
+            ).filter(
+                FundingEvent.entity_id == entity.id,
+                FundingEvent.event_type.in_([
+                    FundingEventType.SBIR_PHASE_1,
+                    FundingEventType.SBIR_PHASE_2,
+                    FundingEventType.SBIR_PHASE_3,
+                ]),
+                ~FundingEvent.id.in_(superseded_ids),
+            ).one()
+            sbir_total = sbir_agg[0] or 0
+            sbir_count = sbir_agg[1] or 0
+
+            # Skip companies without real SBIR pipelines:
+            # require >= $500K total (roughly a Phase II) AND >= 2 awards
+            if sbir_total == 0 or float(sbir_total) < 500_000 or sbir_count < 2:
+                continue
+
+            # Skip public companies — they have market-cap-level funding
+            is_public = self.db.execute(
+                text("""SELECT 1 FROM enrichment_findings
+                        WHERE entity_id = :eid AND finding_type = 'public_company'
+                        AND status IN ('approved', 'ingested')"""),
+                {"eid": entity.id},
+            ).fetchone()
+            if is_public:
+                continue
+
+            # Contract total
+            contract_total = self.db.query(func.coalesce(func.sum(Contract.contract_value), 0)).filter(
+                Contract.entity_id == entity.id,
+            ).scalar() or 0
+
+            # Private capital total (Reg D + Private Round, exclude superseded)
+            regd_total = self.db.query(func.coalesce(func.sum(FundingEvent.amount), 0)).filter(
+                FundingEvent.entity_id == entity.id,
+                FundingEvent.event_type.in_([
+                    FundingEventType.REG_D_FILING,
+                    FundingEventType.PRIVATE_ROUND,
+                ]),
+                ~FundingEvent.id.in_(superseded_ids),
+            ).scalar() or 0
+
+            total_gov = float(sbir_total) + float(contract_total)
+            if total_gov == 0:
+                continue
+
+            sbir_pct = float(sbir_total) / total_gov
+
+            # Only flag if SBIR-dependent AND capital-thin
+            if sbir_pct > 0.70 and float(regd_total) < 1_000_000:
+                # Determine risk level based on dependency percentage
+                if sbir_pct >= 0.90:
+                    risk_level = "high"
+                elif sbir_pct >= 0.80:
+                    risk_level = "medium"
+                else:
+                    risk_level = "low"
+
+                self._create_or_update_signal(
+                    entity_id=entity.id,
+                    signal_type=SIGNAL_SBIR_LAPSE_RISK,
+                    confidence=Decimal(str(round(sbir_pct, 2))),
+                    detected_date=date.today(),
+                    evidence={
+                        "sbir_total": float(sbir_total),
+                        "contract_total": float(contract_total),
+                        "regd_total": float(regd_total),
+                        "sbir_dependency_pct": round(sbir_pct * 100, 1),
+                        "total_gov_funding": float(total_gov),
+                        "note": "SBIR/STTR authorization lapsed Oct 1, 2025. Not reauthorized in FY26 NDAA.",
+                        "risk_level": risk_level,
+                    },
+                )
+                count += 1
+
+        return {"sbir_lapse_risk_signals": count}
 
 
 def get_signal_summary(db: Session) -> dict:

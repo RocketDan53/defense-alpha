@@ -14,11 +14,20 @@ Three OT types are queried:
   - OTHER TRANSACTION AGREEMENT
   - OTHER TRANSACTION IDV
 
+Two modes:
+  - Paginated (default): Pages through the search API. Good for incremental updates.
+  - Bulk (--bulk): Partitions by fiscal year (FY2016–FY2026) and paginates
+    each FY independently. Stays within rate limits by scoping queries to
+    ~1 year instead of the full 10-year range.
+
 Usage:
     python -m scrapers.sam_gov_ota
     python -m scrapers.sam_gov_ota --start-date 2020-10-01 --limit 500
     python -m scrapers.sam_gov_ota --ot-type "OTHER TRANSACTION ORDER"
     python -m scrapers.sam_gov_ota --dry-run
+    python -m scrapers.sam_gov_ota --bulk
+    python -m scrapers.sam_gov_ota --bulk --fy-start 2025 --fy-end 2025
+    python -m scrapers.sam_gov_ota --bulk --format csv
 """
 
 import argparse
@@ -73,6 +82,11 @@ OT_TYPES = [
 
 # Default start: FY2016 (Oct 1, 2015)
 DEFAULT_START_DATE = date(2015, 10, 1)
+
+# Bulk scrape constants
+EXTRACT_DATA_DIR = Path(__file__).parent.parent / "data" / "ota_extracts"
+BULK_FY_START = 2016
+BULK_FY_END = 2026
 
 
 @dataclass
@@ -647,6 +661,270 @@ class SamGovOTAScraper:
         logger.info(f"Completed {ot_type}: {type_fetched} records")
         return type_fetched
 
+    # ──────────────────────────────────────────────────────────────────
+    # Bulk scrape methods — paginated per fiscal year
+    # ──────────────────────────────────────────────────────────────────
+
+    @staticmethod
+    def _fiscal_year_ranges(
+        fy_start: int = BULK_FY_START,
+        fy_end: int = BULK_FY_END,
+    ) -> list[tuple[int, date, date]]:
+        """
+        Generate (fy, start_date, end_date) tuples for fiscal years.
+
+        Federal fiscal year N runs Oct 1 of year N-1 through Sep 30 of year N.
+        The final FY is truncated to today if it hasn't ended yet.
+        """
+        today = date.today()
+        ranges = []
+        for fy in range(fy_start, fy_end + 1):
+            start = date(fy - 1, 10, 1)
+            end = date(fy, 9, 30)
+            if end > today:
+                end = today
+            if start > today:
+                break
+            ranges.append((fy, start, end))
+        return ranges
+
+    def _scrape_fy(
+        self,
+        fy: int,
+        start_date: date,
+        end_date: date,
+        seen_contracts: set,
+        dry_run: bool = False,
+    ) -> int:
+        """
+        Paginate through all OT types for a single fiscal year.
+
+        Queries each OT type separately (the API doesn't reliably support
+        combining them), paginates through all results, and feeds records
+        through _process_record().
+
+        Returns:
+            Number of contracts processed for this FY.
+        """
+        fy_count = 0
+        page_size = 100
+
+        for ot_type in OT_TYPES:
+            offset = 0
+            pending_commits = 0
+
+            while True:
+                params = self._build_params(
+                    ot_type=ot_type,
+                    start_date=start_date,
+                    end_date=end_date,
+                    limit=page_size,
+                    offset=offset,
+                )
+
+                logger.info(f"  FY{fy} {ot_type} offset={offset}...")
+                response = self._make_request(params)
+
+                if not response:
+                    logger.warning(f"  Failed to fetch offset={offset}, skipping")
+                    offset += 1
+                    continue
+
+                # Log total on first page
+                if offset == 0:
+                    total = response.get("totalRecords", "?")
+                    logger.info(f"  {ot_type}: {total} total records available")
+
+                # Find records — API uses different keys
+                records = (
+                    response.get("contractData")
+                    or response.get("awardSummary")
+                    or response.get("results")
+                    or []
+                )
+                if not records:
+                    for key in response.keys():
+                        if isinstance(response[key], list) and len(response[key]) > 0:
+                            records = response[key]
+                            break
+
+                if not records:
+                    break
+
+                if dry_run:
+                    fy_count += len(records)
+                else:
+                    for record in records:
+                        if not isinstance(record, dict):
+                            continue
+                        contract = self._process_record(record, seen_contracts)
+                        if contract:
+                            fy_count += 1
+                            pending_commits += 1
+
+                        if pending_commits >= 500:
+                            try:
+                                self.db.commit()
+                                logger.info(
+                                    f"  Checkpoint (FY{fy}): {fy_count} processed, "
+                                    f"{self.stats.contracts_inserted} total inserted"
+                                )
+                                pending_commits = 0
+                            except Exception as e:
+                                logger.error(f"  Checkpoint commit failed: {e}")
+                                self.db.rollback()
+                                self.stats.errors += 1
+
+                # Pagination control
+                if len(records) < page_size:
+                    break
+                total_records = int(response.get("totalRecords", 0) or 0)
+                if total_records and (offset + 1) * page_size >= total_records:
+                    break
+                offset += 1
+
+            # Commit after each OT type
+            if not dry_run and pending_commits > 0:
+                try:
+                    self.db.commit()
+                    pending_commits = 0
+                except Exception as e:
+                    logger.error(f"  Commit failed for {ot_type}: {e}")
+                    self.db.rollback()
+                    self.stats.errors += 1
+
+        return fy_count
+
+    def _save_fy_extract(self, fy: int, records: list[dict]):
+        """Save raw records to data/ota_extracts/ for reproducibility."""
+        EXTRACT_DATA_DIR.mkdir(parents=True, exist_ok=True)
+        path = EXTRACT_DATA_DIR / f"ota_fy{fy}.json"
+        with open(path, "w") as f:
+            json.dump(records, f)
+        logger.info(f"  Saved {len(records)} records to {path}")
+
+    def bulk_scrape(
+        self,
+        fy_start: int = BULK_FY_START,
+        fy_end: int = BULK_FY_END,
+        dry_run: bool = False,
+        extract_format: str = "json",
+    ) -> ScraperStats:
+        """
+        Bulk scrape mode: paginate through all records per fiscal year.
+
+        Partitions the full date range into fiscal years so each FY stays
+        well within rate limits (~30 pages per OT type per FY vs ~700+
+        for the full range). Each FY is independent — if one fails, the
+        next still runs.
+
+        Args:
+            fy_start: First fiscal year (default: 2016)
+            fy_end: Last fiscal year (default: 2026)
+            dry_run: If True, count records only
+            extract_format: Unused, kept for CLI compatibility
+
+        Returns:
+            ScraperStats with results
+        """
+        self.stats = ScraperStats()
+        self.stats.start_time = datetime.now()
+
+        # Log scraper run
+        from processing.models import ScraperRun as _ScraperRun
+        _run = _ScraperRun(
+            source_name="sam_gov_ota_bulk",
+            status="running",
+            config={
+                "fy_start": fy_start,
+                "fy_end": fy_end,
+                "dry_run": dry_run,
+            },
+        )
+        self.db.add(_run)
+        self.db.commit()
+
+        fy_ranges = self._fiscal_year_ranges(fy_start, fy_end)
+
+        logger.info("=" * 60)
+        logger.info("SAM.GOV OTA BULK SCRAPE - STARTING")
+        logger.info("=" * 60)
+        logger.info(f"Fiscal years: FY{fy_start}–FY{fy_end} ({len(fy_ranges)} years)")
+        logger.info(f"Dry run: {dry_run}")
+        logger.info("=" * 60)
+
+        fy_results = {}
+        seen_contracts = set()
+
+        for fy, start_dt, end_dt in fy_ranges:
+            logger.info(f"\n--- FY{fy}: {start_dt} to {end_dt} ---")
+
+            try:
+                fy_count = self._scrape_fy(
+                    fy=fy,
+                    start_date=start_dt,
+                    end_date=end_dt,
+                    seen_contracts=seen_contracts,
+                    dry_run=dry_run,
+                )
+
+                if dry_run:
+                    logger.info(f"[DRY RUN] FY{fy}: {fy_count} records found")
+                    fy_results[fy] = f"dry_run:{fy_count}"
+                elif fy_count > 0:
+                    logger.info(f"FY{fy}: {fy_count} contracts processed")
+                    fy_results[fy] = f"success:{fy_count}"
+                else:
+                    logger.info(f"FY{fy}: no new records")
+                    fy_results[fy] = "empty"
+
+            except Exception as e:
+                logger.error(f"FY{fy}: Unexpected error: {e}", exc_info=True)
+                fy_results[fy] = f"error:{e}"
+                self.stats.errors += 1
+                self.db.rollback()
+
+        # Update stats
+        self.stats.contracts_fetched = (
+            self.stats.contracts_inserted
+            + self.stats.contracts_updated
+            + self.stats.contracts_skipped
+        )
+        self.stats.end_time = datetime.now()
+        self.stats.log_summary()
+
+        # Log per-FY results
+        logger.info("Per fiscal year results:")
+        for fy, status in sorted(fy_results.items()):
+            logger.info(f"  FY{fy}: {status}")
+
+        # Determine overall status
+        statuses = set(fy_results.values())
+        has_success = any(s.startswith("success") for s in statuses)
+        has_failure = any(s.startswith("error") for s in statuses)
+        if has_failure and has_success:
+            overall_status = "partial"
+        elif has_failure:
+            overall_status = "failed"
+        else:
+            overall_status = "success"
+
+        # Update ScraperRun
+        try:
+            _run.completed_at = datetime.now()
+            _run.status = overall_status
+            _run.records_fetched = self.stats.contracts_fetched
+            _run.records_new = self.stats.contracts_inserted
+            _run.records_updated = self.stats.contracts_updated
+            _run.entities_created = self.stats.entities_created
+            _run.entities_matched = self.stats.entities_existing
+            _run.checkpoint = {"fy_results": {str(k): v for k, v in fy_results.items()}}
+            self.db.commit()
+        except Exception:
+            pass
+
+        return self.stats
+
     def scrape(
         self,
         start_date: date = DEFAULT_START_DATE,
@@ -864,19 +1142,33 @@ def main():
         action="store_true",
         help="Resume from where a previous run left off (skips already-ingested pages)",
     )
+    parser.add_argument(
+        "--bulk",
+        action="store_true",
+        help="Use Extract API for bulk historical load (one request per fiscal year)",
+    )
+    parser.add_argument(
+        "--fy-start",
+        type=int,
+        default=BULK_FY_START,
+        help=f"First fiscal year for bulk mode (default: {BULK_FY_START})",
+    )
+    parser.add_argument(
+        "--fy-end",
+        type=int,
+        default=BULK_FY_END,
+        help=f"Last fiscal year for bulk mode (default: {BULK_FY_END})",
+    )
+    parser.add_argument(
+        "--format",
+        type=str,
+        choices=["json", "csv"],
+        default="json",
+        dest="extract_format",
+        help="Extract format for bulk mode (default: json, csv is fallback)",
+    )
 
     args = parser.parse_args()
-
-    # Parse dates
-    try:
-        start_date = date.fromisoformat(args.start_date)
-        end_date = date.fromisoformat(args.end_date)
-    except ValueError as e:
-        logger.error(f"Invalid date format: {e}")
-        sys.exit(1)
-
-    # Determine OT types to query
-    ot_types = [args.ot_type] if args.ot_type else OT_TYPES
 
     # Create database session
     db = SessionLocal()
@@ -884,14 +1176,33 @@ def main():
     try:
         scraper = SamGovOTAScraper(db=db)
 
-        stats = scraper.scrape(
-            start_date=start_date,
-            end_date=end_date,
-            ot_types=ot_types,
-            limit=args.limit,
-            dry_run=args.dry_run,
-            resume=args.resume,
-        )
+        if args.bulk:
+            # Bulk extract mode
+            stats = scraper.bulk_scrape(
+                fy_start=args.fy_start,
+                fy_end=args.fy_end,
+                dry_run=args.dry_run,
+                extract_format=args.extract_format,
+            )
+        else:
+            # Paginated mode (default)
+            try:
+                start_date = date.fromisoformat(args.start_date)
+                end_date = date.fromisoformat(args.end_date)
+            except ValueError as e:
+                logger.error(f"Invalid date format: {e}")
+                sys.exit(1)
+
+            ot_types = [args.ot_type] if args.ot_type else OT_TYPES
+
+            stats = scraper.scrape(
+                start_date=start_date,
+                end_date=end_date,
+                ot_types=ot_types,
+                limit=args.limit,
+                dry_run=args.dry_run,
+                resume=args.resume,
+            )
 
         # Post-scrape analytics
         if not args.dry_run:
