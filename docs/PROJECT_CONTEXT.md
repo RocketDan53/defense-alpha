@@ -1,6 +1,6 @@
 # Aperture Signals: Project Context
 
-**Last Updated:** February 24, 2026
+**Last Updated:** March 3, 2026
 **Purpose:** Spin up a new Claude instance with full context on the Aperture Signals project
 
 ---
@@ -9,13 +9,13 @@
 
 A Python-based defense intelligence platform that aggregates government and private market data to identify investment signals in defense technology companies. Built to surface emerging companies with real traction for defense investors, sales consultants, and BD teams.
 
-**Core value proposition:** Systematic signal detection + policy alignment scoring + freshness-weighted composite ranking to identify which SBIR-stage companies are most likely to win production contracts.
+**Core value proposition:** Systematic signal detection + policy alignment scoring + freshness-weighted composite ranking to identify which SBIR-stage companies are most likely to win production contracts. Web enrichment pipeline closes data gaps (OTA contracts, full funding round sizes) that make reports credible to insiders.
 
-**Business model:** Intelligence company, not SaaS platform. Reports are the product, the engine is the back office. Revenue model: curated reports ($2-5K), quarterly intelligence briefs ($10-20K/yr). Defensibility comes from outcome tracking time series (time-locked), human intelligence from client feedback, and analyst reputation.
+**Business model:** Intelligence company, not SaaS platform. Reports are the product, the engine is the back office. Revenue model: curated reports ($250-500 per brief for sales consultants, $2-5K for investors), quarterly intelligence briefs ($10-20K/yr). Defensibility comes from outcome tracking time series (time-locked), human intelligence from client feedback, and analyst reputation. First client (Don) has received 3 free deliverables; pricing conversation pending on next request.
 
 ---
 
-## Current Data State (Feb 24, 2026)
+## Current Data State (Feb 27, 2026)
 
 ### Entity Counts by Type
 | Type | Count | Description |
@@ -45,6 +45,7 @@ A Python-based defense intelligence platform that aggregates government and priv
 | Relationships | 39,712 | - | Knowledge graph (rebuilt Feb 24) |
 | Entity Merges | 834 | - | High-confidence auto-merges |
 | Review Queue | 201,328 | - | Pairs flagged for manual review |
+| Fund Positions | 40 | - | First cohort: Next Wave Q1 2026 (20 signal + 20 benchmark) |
 
 ---
 
@@ -64,9 +65,13 @@ A Python-based defense intelligence platform that aggregates government and priv
 - SAM.gov OTA scraper (`scrapers/sam_gov_ota.py`) — 752 OTA contracts ingested, SAM.gov rate-limiting paused further scraping
 - Comparables engine — validated on Scout Space (43 comps, 5x raise multiplier finding); now includes Jaccard technology tag similarity (weight 2.0)
 - Deal intelligence brief generator (`scripts/aperture_query.py`) — single-command 9-section deal brief with comparables, signals, policy alignment, lifecycle narrative, web verification, and Claude analyst assessment
-- Web verification layer (`scripts/aperture_query.py:build_verification_notes()`) — Claude + web_search tool cross-references Aperture data against public sources, outputs CONFIRMED/GAP/NOTE findings
+- Web verification layer (`scripts/aperture_query.py:build_verification_notes()`) — Claude + web_search tool cross-references Aperture data against public sources, outputs CONFIRMED/GAP/NOTE findings; now passes contract/funding details for proper dedup (Feb 27)
+- Web enrichment pipeline (`scripts/enrich_entity.py`) — two-phase Claude + web_search: search phase finds data, structure phase extracts JSON; stages findings in `enrichment_findings` table for review/approval before ingesting into contracts/funding_events; tags all ingested records with `source = "web_enrichment"` for provenance
+- Branded PDF generator (`scripts/generate_darkhive_pdf.py`) — Aperture Signals branded PDFs with compact layout, PROPRIETARY & CONFIDENTIAL marking, left-aligned tables; reusable template for all client-facing briefs
 - Analyst note PDF generator (`scripts/generate_analyst_note.py`) — one-page branded PDF for client-facing competitive positioning notes
 - SEC EDGAR Form D competitor research — EDGAR API integration for capitalization tiering of competitors by Reg D filing amounts
+- Key Contacts & Investor Syndicate section — new standard brief section with company leadership, investor syndicate with named individuals, and network analysis notes (Feb 27)
+- Notional fund system (`Fund/fund_manager.py`) — VC-style portfolio construct for thesis validation; strategy definition, cohort deployment with paired random benchmarks, milestone tracking, performance reporting; 3 strategies defined (Next Wave, Policy Tailwind, Signal Momentum); first cohort deployed Q1 2026 (Mar 3)
 
 ---
 
@@ -92,6 +97,9 @@ A Python-based defense intelligence platform that aggregates government and priv
 5. **Starfish Space Deal Brief** — Deal brief generated via aperture_query.py (`reports/brief_starfish_space.md`)
 6. **Firestorm Labs Deal Brief** — Full 9-section deal brief with web verification, technology-tag-aware comparables (`reports/brief_firestorm_labs_v3.md`)
 7. **Firestorm Labs Analyst Note** — One-page PDF competitive positioning note for Drone Dominance program (`reports/firestorm_drone_dominance.pdf`). Includes SEC EDGAR capitalization tiering of 24 UAS competitors.
+8. **Investor Leads for Don** — Anti-jam GPS/PNT investor syndicate analysis extracted from SEC EDGAR Form D director data
+9. **X-Bow Launch Systems Deal Brief (enriched)** — First brief generated after web enrichment pipeline. Before: "No contracts found," $92.5M raised. After: 14 contracts ($450.5M including 6 OTAs), "Scaling" lifecycle. Validated enrichment pipeline closes credibility gaps.
+10. **Darkhive Inc. Deal Brief** — Client-facing brief with Key Contacts & Investor Syndicate section (Goodson/Turner/Moroniti/Tisdale + 6 investor entities with named individuals), Client Opportunity section (antenna/RF integration for YellowJacket variants), branded PDF delivered to Don (`reports/darkhive_brief.pdf`). Third free deliverable before pricing conversation.
 
 ---
 
@@ -363,15 +371,18 @@ Deal intelligence via SBIR embedding similarity + agency overlap + policy alignm
 
 Single-command 9-section deal intelligence brief connecting all data sources:
 - **Sections:** Company Profile, Government Traction, Private Capital Activity, Signal Profile, Policy Alignment, Lifecycle Position, Comparables Analysis, Data Coverage & Verification Notes, Analyst Assessment
+- **Client-facing variant:** Removes Signal Profile, Policy Alignment, Top 15 comparables, CONFIRMED/GAP data points; adds Key Contacts & Investor Syndicate section and Client Opportunity section tailored to recipient's capabilities
 - Direct sqlite3 queries (not SQLAlchemy ORM) for performance and simplicity
 - Fuzzy entity lookup via `rapidfuzz` (token_sort_ratio, cutoff=75)
 - Comparables engine: primary search by policy alignment (top priority >= 0.5), secondary by core_business; filters: SBIR count 0.5x-2x target, Phase II >= 1, Reg D total >= $50K; sorted by profile similarity with **Jaccard technology tag overlap** (weight 2.0); top 15 in table + top 5 detailed profiles
-- Lifecycle narrative: 3-4 sentence paragraph with dated milestone progression
-- **Web verification** (`build_verification_notes()`): Claude + `web_search_20250305` server-side tool cross-references Aperture data against public sources. Outputs CONFIRMED/GAP/NOTE findings. Disabled with `--no-verify`.
+- Lifecycle narrative: 3-4 sentence paragraph with dated milestone progression; **graceful NULL date handling** (falls back to count-based narrative when contract dates unavailable)
+- **Web verification** (`build_verification_notes()`): Claude + `web_search_20250305` server-side tool cross-references Aperture data against public sources. Now passes top 10 contract details (value, agency, date, procurement type) and all funding events for proper dedup — prevents flagging already-ingested enrichment data as GAPs. Outputs CONFIRMED/GAP/NOTE findings. Disabled with `--no-verify`.
 - Claude analyst assessment (Sonnet) with current date in system prompt and temporal framing instruction. Includes disclaimer referencing verification notes for identified data gaps.
 - Signal composite scoring with freshness-weighted tiers (same weights as RAG engine)
 - Policy tailwind score: weighted average of scores > 0.2 (matches `processing/policy_alignment.py`)
-- Validated on Scout Space, Starfish Space, and Firestorm Labs
+- **NULL contract date sorting:** `ORDER BY CASE WHEN award_date IS NULL THEN 1 ELSE 0 END, award_date` in both Government Traction and Lifecycle queries — dated contracts first, undated at bottom
+- **Private Capital query:** Excludes superseded funding events (WHERE id NOT IN subquery on parent_event_id), includes both REG_D_FILING and PRIVATE_ROUND event types, displays source provenance (SEC EDGAR vs Web Enrichment)
+- Validated on Scout Space, Starfish Space, Firestorm Labs, X-Bow (enriched), Darkhive (client-facing)
 
 **Usage:**
 ```bash
@@ -379,6 +390,105 @@ python scripts/aperture_query.py --type deal --entity "Scout Space" --output rep
 python scripts/aperture_query.py --type deal --entity "Starfish Space" --no-claude  # Skip API call
 python scripts/aperture_query.py --type deal --entity "Shield AI" --pdf             # Also generate PDF
 python scripts/aperture_query.py --type deal --entity "Firestorm Labs" --no-verify  # Skip web verification
+```
+
+### 15. Web Enrichment Pipeline ✅ COMPLETE
+**File:** `scripts/enrich_entity.py`
+
+Closes data gaps by searching the web for contracts, funding rounds, OTAs, and partnerships that aren't captured by structured scrapers (USASpending, SBIR.gov, SEC EDGAR):
+
+**Architecture — two-phase approach:**
+1. **Search phase:** Claude + `web_search_20250305` tool finds contracts, funding rounds, acquisitions, partnerships, OTA agreements. Prompt includes current DB counts and details so Claude can identify what's missing.
+2. **Structure phase:** Separate Claude API call (no tools) extracts structured JSON from search results. Separation matters because web search responses are messy (tool_use blocks, citations). Asking for clean JSON in the same call that uses tools is unreliable.
+
+**Data flow:**
+```
+enrich_entity.py
+  ├── gather_existing_data(conn, entity_id) → current DB counts/details
+  ├── search_and_extract(client, name, existing) → structured JSON findings
+  ├── stage_findings(conn, entity_id, findings) → enrichment_findings table (status='pending')
+  ├── review_pending(conn) → interactive CLI approve/reject
+  └── ingest_approved(conn, finding_id) → writes to contracts/funding_events
+```
+
+**Ingestion logic:**
+- Contracts: INSERT with `source = "web_enrichment:{url}"`
+- Funding rounds (new): INSERT as `event_type = 'PRIVATE_ROUND'`
+- Funding rounds (update existing): Links via `parent_event_id` to original EDGAR filing, preserving provenance while displaying corrected amount
+- OTA awards: INSERT into contracts with `procurement_type = 'ota'`
+- Partnerships: INSERT into relationships table
+
+**Deduplication:**
+- Contracts: match on similar value (within 10%) + same agency + date within 90 days
+- Funding: match on same round_stage + date within 6 months; if new amount > existing, flag as update (not duplicate)
+
+**Validation:** X-Bow brief went from "No contracts found" + $92.5M raised → 14 contracts ($450.5M) + lifecycle "Scaling." Enrichment ingested the $191M production contract, Navy rocket motor contracts, NSWC Indian Head contract, and Spencer Composites acquisition data.
+
+**Usage:**
+```bash
+python scripts/enrich_entity.py --entity "X-BOW LAUNCH SYSTEMS INC"
+python scripts/enrich_entity.py --entity "DARKHIVE INC" --auto-approve  # High-confidence auto-ingest
+python scripts/enrich_entity.py --batch --file priority_entities.txt
+python scripts/enrich_entity.py --review  # Review pending enrichments
+```
+
+### 16. Notional Fund System ✅ COMPLETE
+**Files:** `Fund/fund_manager.py`, `Fund/create_fund_tables.py`, `Fund/strategies/*.json`
+
+VC-style portfolio construct that tests Aperture's signal-based thesis in real time. Deploys signal-selected cohorts against random benchmarks and tracks milestone hit rates to measure differential alpha.
+
+**Design principles:**
+- Buy-and-hold positions (no exits except terminal events) — matches defense VC reality
+- Milestone-based performance measurement (not IRR/TVPI) — measurable in quarters, not decades
+- Simultaneous benchmark deployment from same eligible universe — ensures fair comparison
+- Entry state frozen at selection time — every position captures the full signal profile that justified inclusion
+
+**Components:**
+- `fund_strategies` — Thesis definitions with structured JSON selection criteria (eligible universe filters, ranking, signal requirements)
+- `fund_cohorts` — Vintage deployments; each signal cohort gets a paired random benchmark cohort
+- `fund_positions` — Per-company positions with frozen entry state (composite score, signals, SBIRs, contracts, policy tailwind, lifecycle stage)
+- `fund_milestones` — Observable events after entry (funding raises, contracts, SBIR advances, lifecycle progression, score changes) with `months_since_entry` and dedup via `source_key`
+
+**Strategies defined:**
+| Strategy | Thesis | Eligible Universe |
+|----------|--------|-------------------|
+| Next Wave | Phase II graduates with no private capital yet (core 80%/35mo prediction) | ~2,638 companies |
+| Policy Tailwind | Highest alignment to top-growth budget areas (space +38%, autonomous +10%) | ~3,044 companies |
+| Signal Momentum | Strongest recent signal activity regardless of funding history | ~2,386 companies |
+
+**First deployment:** Next Wave Q1 2026 — 20 signal positions (entry scores 5.09→3.58) vs 20 random benchmark positions (avg ~1.3). Clear differential at entry; milestone tracking measures whether this translates to outcome alpha.
+
+**Milestone types tracked:**
+- FUNDING_RAISE — New Reg D / VC round after entry
+- NEW_CONTRACT — DoD/federal contract after entry
+- SBIR_ADVANCE — Phase progression after entry
+- LIFECYCLE_ADVANCE — Stage progression (e.g., prototype → production)
+- COMPOSITE_SCORE_INCREASE — Score improvement since entry
+- NEW_AGENCY — Contract with new DoD branch
+- ACQUISITION — Company acquired (terminal)
+- GONE_STALE — No activity 24+ months (negative milestone)
+
+**Performance metric:** Milestone hit rate differential (signal cohort rate minus benchmark rate). A 25% vs 10% funding raise hit rate at 12 months = concrete, defensible claim for client conversations.
+
+**Usage:**
+```bash
+# Strategy management
+python Fund/fund_manager.py strategy create --name "Next Wave" --config Fund/strategies/next_wave.json
+python Fund/fund_manager.py strategy activate --name "Next Wave"
+python Fund/fund_manager.py strategy list
+python Fund/fund_manager.py strategy show --name "Next Wave"
+
+# Cohort deployment
+python Fund/fund_manager.py deploy --strategy "Next Wave" --vintage "2026-Q1" --dry-run
+python Fund/fund_manager.py deploy --strategy "Next Wave" --vintage "2026-Q1"
+
+# Milestone tracking
+python Fund/fund_manager.py track --since 2026-01-01 --dry-run
+python Fund/fund_manager.py track --since 2026-01-01
+
+# Performance reporting
+python Fund/fund_manager.py performance --strategy "Next Wave"
+python Fund/fund_manager.py performance --all
 ```
 
 ---
@@ -448,6 +558,36 @@ combined = 0.55 x norm_composite + 0.30 x policy_tailwind + 0.15 x contract_tier
 
 **Rationale:** Found 25 duplicate groups totaling $1.67B in inflated capital. Biggest offender: Genesys Cloud ($1.5B duplicated). Applied consistently across all three detector locations (sbir_to_vc_raise, sbir_validated_raise, detect_funding_raises).
 
+### 12. Funding Round Double-Counting Fix (parent_event_id)
+**Decision:** Added `parent_event_id` column to `funding_events` table. When web enrichment finds a larger round size than the EDGAR filing (e.g., $105M Series B vs $21M Form D), the enriched record links to the original via `parent_event_id` instead of creating a duplicate. Private Capital query excludes superseded rows: `WHERE id NOT IN (SELECT parent_event_id FROM funding_events WHERE parent_event_id IS NOT NULL)`.
+
+**Rationale:** EDGAR Form D captures the amount offered in the filing, which is often just a tranche (not the full round). Press releases report full round sizes. Without linking, both appear in the brief, inflating totals. X-Bow showed $92.5M (EDGAR) when actual was ~$157M, but naively adding both would double-count.
+
+### 13. Two-Phase Web Enrichment (Search → Structure)
+**Decision:** Enrichment uses two separate Claude API calls: Phase 1 with `web_search` tool for research, Phase 2 without tools for JSON extraction.
+
+**Rationale:** Asking Claude to search the web AND return structured JSON in the same call produces unreliable JSON — response contains tool_use blocks, partial text, and citations mixed with data. Separating search from structuring produces clean, parseable JSON consistently.
+
+### 14. Verification Prompt Dedup Enhancement
+**Decision:** `build_verification_notes()` now passes top 10 contract details (value, agency, date, procurement type) and all funding events to Claude, not just counts.
+
+**Rationale:** After enrichment ingests data, verification was still flagging it as GAPs because the prompt only said "14 contracts" without details. Claude couldn't match "$191M production contract" against just a count. With details, Claude properly marks matching data as CONFIRMED.
+
+### 15. NULL Contract Date Handling
+**Decision:** Contract queries use `ORDER BY CASE WHEN award_date IS NULL THEN 1 ELSE 0 END, award_date`. Lifecycle narrative filters `dated_contracts = [c for c in contracts if c["award_date"] is not None]` and falls back to count-based narrative when no dates available.
+
+**Rationale:** Web-enriched contracts often have NULL dates (press releases mention value/agency but not exact award date). Before fix, lifecycle narrative said "first production contract ($191.3M) in N/A" — clearly broken. Now it says "secured 14 contracts totaling $450.5M, including a $191.3M standard award."
+
+### 16. Client-Facing Brief Variant
+**Decision:** For sales consultant recipients (Don), briefs remove Signal Profile, Policy Alignment, Top 15 comparables table, and CONFIRMED/GAP data points. Add Key Contacts & Investor Syndicate section and Client Opportunity section tailored to recipient's capabilities.
+
+**Rationale:** Don needs actionable sales intelligence, not Aperture's internal scoring methodology. Contacts section transforms the brief from a research report into a sales tool — Don can reference specific investor relationships and integration needs in his outreach. Client Opportunity section maps the target company's product roadmap to Don's specific capabilities (antenna/RF engineering).
+
+### 17. Notional Fund as Forward-Looking Validation
+**Decision:** Build a VC-style notional portfolio system to test Aperture's thesis in real time, rather than relying solely on backward-looking signal validation.
+
+**Rationale:** The 80% prediction rate and 35-month lead time are historical backtests. A notional fund creates dated, documented picks measured against random baselines — the difference between "our backtest looks good" and "here's what we called in real time." The fund also becomes the most compelling sales artifact for client conversations: it demonstrates Aperture trusts its own signals enough to bet on them. Designed with VC constraints (buy-and-hold, no exits) and VC-relevant metrics (milestone hit rates, not IRR) because that matches how the client base actually deploys capital.
+
 ---
 
 ## Architecture
@@ -488,11 +628,20 @@ defense-alpha/
 │   ├── extract_investors.py    # Investor extraction from Reg D related persons
 │   ├── materialize_agencies.py # Agency relationship profiles (dollar volumes, counts)
 │   ├── aperture_query.py            # Deal intelligence brief generator (9-section, single command)
+│   ├── enrich_entity.py             # Web enrichment pipeline (two-phase Claude + web_search)
 │   ├── generate_prospect_report.py  # Markdown report generator
 │   ├── generate_pdf_report.py       # PDF report generator (prospect reports)
 │   ├── generate_phase2_pdf.py       # PDF report generator (Phase II Signal)
 │   ├── generate_analyst_note.py     # One-page analyst note PDF (branded)
+│   ├── generate_darkhive_pdf.py     # Branded client-facing PDF (reusable template)
 │   └── policy_signal_poc.py         # Policy signal-response PoC (Space Force, original)
+├── Fund/
+│   ├── fund_manager.py         # Notional fund CLI (strategy/deploy/track/performance)
+│   ├── create_fund_tables.py   # Fund table creation
+│   └── strategies/
+│       ├── next_wave.json      # Phase II graduates, no private capital
+│       ├── policy_tailwind.json # Highest policy alignment
+│       └── signal_momentum.json # Strongest recent signals
 ├── results/
 │   ├── benchmark_space_force.json       # Signal-response benchmark results
 │   ├── benchmark_nds_2018.json
@@ -506,6 +655,9 @@ defense-alpha/
 │   ├── brief_scout_space.md       # Scout Space deal intelligence brief (8 sections)
 │   ├── brief_starfish_space.md    # Starfish Space deal intelligence brief
 │   ├── brief_firestorm_labs_v3.md # Firestorm Labs deal brief (9-section, web-verified)
+│   ├── brief_xbow_enriched.md    # X-Bow deal brief (post-enrichment, 14 contracts/$450M)
+│   ├── brief_darkhive.md         # Darkhive client-facing brief (contacts + client opportunity)
+│   ├── darkhive_brief.pdf        # Darkhive branded PDF for Don
 │   ├── firestorm_drone_dominance.pdf  # Firestorm analyst note (one-page PDF)
 │   ├── graph_space_resilience.html     # Interactive ecosystem visualizations
 │   ├── graph_autonomous_systems.html
@@ -548,8 +700,22 @@ procurement_type (standard/ota, indexed)
 
 ### funding_events
 ```sql
-id, entity_id (FK), event_type (sbir_phase_1/2/3, reg_d_filing, vc_round, etc.)
+id, entity_id (FK), event_type (sbir_phase_1/2/3, reg_d_filing, vc_round, PRIVATE_ROUND, etc.)
 amount, event_date, investors_awarders (JSON), round_stage, raw_data (JSON)
+parent_event_id (FK self-ref, nullable) -- links enriched round to original EDGAR filing it supersedes
+source -- "sec_edgar", "web_enrichment:{url}", etc.
+```
+
+### enrichment_findings
+```sql
+id, entity_id (FK)
+finding_type (contract/funding_round/partnership/ota_award)
+finding_data (JSON), source_url, confidence (high/medium/low)
+status (pending/approved/rejected/ingested)
+reviewed_at, reviewed_by (auto/manual)
+ingested_at, ingested_record_id
+created_at
+-- Index: (entity_id, status)
 ```
 
 ### signals
@@ -582,6 +748,42 @@ weight (edge strength/dollar value), properties (JSON)
 first_observed, last_observed
 ```
 
+### fund_strategies
+```sql
+id, name (unique), description, status (draft/active/paused/retired)
+selection_criteria (JSON: eligible_universe, ranking, filters)
+target_cohort_size, deployment_frequency (quarterly/monthly/manual)
+```
+
+### fund_cohorts
+```sql
+id, strategy_id (FK), cohort_type (signal/benchmark)
+vintage_label (e.g. "2026-Q1"), deployed_at
+paired_cohort_id (FK self-ref) -- benchmark points to its signal cohort
+selection_metadata (JSON: eligible_universe_size, random_seed, score_distribution)
+```
+
+### fund_positions
+```sql
+id, cohort_id (FK), entity_id (FK)
+status (active/terminal_acquired/terminal_inactive/terminal_merged)
+-- Frozen entry state:
+entry_composite_score, entry_freshness_adjusted_score, entry_policy_tailwind
+entry_lifecycle_stage, entry_signals (JSON), entry_sbir_count
+entry_contract_count, entry_contract_value, entry_regd_count, entry_regd_value
+snapshot_id (FK to entity_snapshots), selection_rank, selection_reason
+-- Unique: (cohort_id, entity_id)
+```
+
+### fund_milestones
+```sql
+id, position_id (FK), entity_id (FK)
+milestone_type (funding_raise/new_contract/sbir_advance/lifecycle_advance/
+                composite_score_increase/new_agency/acquisition/gone_stale)
+milestone_date, milestone_value, months_since_entry
+details (JSON), source_key (unique, for dedup)
+```
+
 ---
 
 ## How to Start a Session
@@ -603,8 +805,12 @@ Defense intelligence platform with:
 - Next wave pipeline: 3,221 Phase II startups with no Reg D
 - Knowledge graph: 39,712 relationships materialized (agency, contract, policy edges)
 - Signal-response benchmarks: 3 calibrated pairs (Space Force, NDS 2018, Ukraine Drones)
+- Web enrichment pipeline: `python scripts/enrich_entity.py --entity "Company Name"` (two-phase Claude + web search → staged findings → approve → ingest)
+- Notional fund: 3 strategies (Next Wave, Policy Tailwind, Signal Momentum), Q1 2026 cohorts deployed
+- Fund CLI: `python Fund/fund_manager.py performance --all`
 - Deal brief generator: `python scripts/aperture_query.py --type deal --entity "Company Name"`
-- Reports delivered: Scout Space, Starfish Space, Firestorm Labs briefs + analyst note, Phase II Signal, RF/Comms v2
+- Reports delivered: Scout Space, Starfish Space, Firestorm Labs, X-Bow (enriched), Darkhive (client-facing + branded PDF), Phase II Signal, RF/Comms v2, investor leads
+- Remaining data gaps: OTA scraper paused at 752 (SAM.gov rate limit), EDGAR captures tranches not full rounds (enrichment compensates per-entity), consortium resolution needed
 
 Current priorities: see Next Priority section below.
 
@@ -658,13 +864,14 @@ Aperture Signals → knowledge graph of defense capital formation
 - Apply benchmarks to current signals for quantitative predictions
 - Defensible: time-locked dataset, cross-domain linkage nobody else has
 
-**Five product surfaces validated:**
+**Seven product surfaces validated:**
 1. Thesis reports (Phase II Signal)
-2. Deal intelligence briefs — single-command 9-section brief via `aperture_query.py` (Scout Space, Starfish Space, Firestorm Labs)
-3. Analyst notes — one-page competitive positioning PDFs with EDGAR-sourced capitalization data (Firestorm Labs)
-4. Comparables/deal intelligence (Scout Space standalone, now integrated into briefs with Jaccard tag similarity)
-5. Sector intelligence (RF/Comms v2)
-- Future: signal-response benchmarks as queryable dataset
+2. Deal intelligence briefs — single-command 9-section brief via `aperture_query.py` (Scout Space, Starfish Space, Firestorm Labs, X-Bow enriched)
+3. Client-facing briefs — stripped-down variant with Key Contacts, Investor Syndicate, Client Opportunity sections, branded PDF delivery (Darkhive for Don)
+4. Analyst notes — one-page competitive positioning PDFs with EDGAR-sourced capitalization data (Firestorm Labs)
+5. Comparables/deal intelligence (Scout Space standalone, now integrated into briefs with Jaccard tag similarity)
+6. Sector intelligence (RF/Comms v2)
+7. Notional fund system — VC-style portfolio construct with signal-selected cohorts vs random benchmarks; measures milestone hit rate differential as forward-looking thesis validation (Next Wave, Policy Tailwind, Signal Momentum strategies deployed)
 
 **Elevator Pitch:**
 "Aperture maps government defense spending to private capital markets. We track every SBIR award, defense contract, and SEC filing, link them to the same companies, and detect signals that predict where private money is going to flow. Think of it as the intelligence layer between the Pentagon's budget and the investors deploying capital around it."
@@ -687,6 +894,9 @@ One-liner: "Aperture tells defense investors where the government's money is goi
 - Has checkpoint/resume logic — retry from different network or wait for rate limit reset
 - `python -m scrapers.sam_gov_ota --start-date 2023-10-01`
 - Then backfill: `python -m scrapers.sam_gov_ota --start-date 2015-10-01 --end-date 2023-09-30`
+- **This remains Aperture's biggest structured data gap.** OTAs grew from $950M (FY2015) to $18B+ (FY2024). Anduril, Shield AI, Skydio entered defense through OTAs and are underrepresented in current data. GAO found $40B+ in OTAs not reported to USASpending.
+- 57% of OTA dollars flow through consortia (SOSSEC, ATI, NCMS) — need second-level resolution for actual performers
+- Web enrichment pipeline partially compensates (ingests OTAs found via web search with `procurement_type = 'ota'`), but systematic scraping is needed for coverage
 
 ### 4. Classify remaining 5,623 entities (~51% of universe)
 - Business classifier + policy alignment for unclassified entities
@@ -697,10 +907,10 @@ One-liner: "Aperture tells defense investors where the government's money is goi
 - How many OTA vendors are already in the entity universe?
 - How many are new (invisible in current data)?
 
-### 6. Backfill SEC EDGAR Reg D to 2012 for stronger baselines
+### ~~6. Backfill SEC EDGAR Reg D to 2012 for stronger baselines~~ ✅ DONE
 - `python scrapers/sec_edgar.py --start-date 2012-01-01 --end-date 2019-12-31`
-- Unblocks statistically valid baselines for all signal-response benchmarks
-- Current pre-2019 Reg D baseline: only 7 filings (too thin for confidence intervals)
+- Added ~3,000 historical funding events strengthening baseline benchmarks
+- Pre-2019 Reg D baseline expanded from 7 filings to statistically useful sample
 
 ### ~~7. Run comparables on 2-3 more companies to confirm methodology generalizes~~ ✅ DONE
 - Scout Space, Starfish Space, and Firestorm Labs briefs generated via `aperture_query.py`
@@ -718,10 +928,24 @@ One-liner: "Aperture tells defense investors where the government's money is goi
 - Goal: `python scripts/rag_query.py "counter-drone RF" --pdf reports/counter_drone.pdf`
 - **Partial:** `aperture_query.py` achieves single-command → markdown → optional PDF for deal briefs. RAG→sector report pipeline still needed.
 
+### ~~12. Build notional fund system for thesis validation~~ ✅ DONE (Mar 3)
+- VC-style portfolio construct: strategy definition → cohort deployment → milestone tracking → performance reporting
+- 3 strategies defined: Next Wave (Phase II graduates), Policy Tailwind (budget-aligned), Signal Momentum (highest composite scores)
+- First cohort deployed: Next Wave Q1 2026 (20 signal + 20 benchmark)
+- Next: deploy Policy Tailwind + Signal Momentum Q1 2026 cohorts, run first milestone scan, generate performance report at 90 days (June 2026)
+
 ### Medium Priority
+
+#### Remaining Data Gaps (Credibility Blockers)
+- **Private market funding accuracy:** SEC EDGAR Form D captures filing amounts (often just tranches), not full round sizes. Web enrichment partially closes this on a per-entity basis, but systematic coverage requires either: (a) paid data source integration (Crunchbase/PitchBook API), or (b) batch web enrichment across priority entities before each report delivery. Current state: enrichment validated on X-Bow ($92.5M EDGAR → ~$157M actual), needs to be run on every entity before external delivery.
+- **OTA contract completeness:** 752 OTA contracts ingested from SAM.gov (paused by rate limiting). Estimated 10,000+ OTA awards exist across DIU, AFWERX, NavalX, SOCOM, Army Apps Lab, DARPA. Web enrichment fills gaps per-entity but can't replace systematic scraping for universe-wide coverage. The companies that matter most (Anduril, Shield AI, Skydio) entered defense through OTAs.
+- **Consortium resolution:** 57% of OTA dollars flow through intermediaries (NSTXL, SOSSEC, ATI, NCMS). SAM.gov awards list the consortium as vendor, not the performing company. Need second-level resolution to attribute awards to actual performers.
+- **Acquisition/partnership data:** No structured source. Web enrichment captures these opportunistically but no systematic coverage. Matters for lifecycle classification (X-Bow's Spencer Composites acquisition indicates production stage).
+
+#### Other Medium Priority
 - **Policy headwind signal** — Negative signal for companies in declining budget areas (e.g., hypersonics -43%)
 - **Remaining outcome detectors** — sbir_advance, new_agency, company_inactive (3 stubs)
-- **Fix Reg D filing count edge case** — NULL-date filings cause off-by-one
+- **~~Fix Reg D filing count edge case~~** ✅ Fixed via `parent_event_id` schema change — NULL-date filings and double-counting resolved
 - **Refresh data pulls** — USASpending (30 days), SBIR (current year), SEC EDGAR (90 days)
 - **Generate updated RF report** — Refresh with latest signal/policy data
 - **Review entity resolution queue** — 201,328 pairs in `data/review_queue.csv`
@@ -754,11 +978,29 @@ One-liner: "Aperture tells defense investors where the government's money is goi
 ### Web Verification Layer
 - `build_verification_notes()` in `aperture_query.py` uses Claude Sonnet + `web_search_20250305` server-side tool
 - Tool definition: `{"type": "web_search_20250305", "name": "web_search", "max_uses": 5}`
-- Passes current DB counts (SBIRs, contracts, Reg D) for comparison against public sources
+- Now passes top 10 contract details (value, agency, date, procurement type) and all funding events for proper dedup against enriched data
 - Extracts text blocks from response (skips tool_use/tool_result blocks)
 - Outputs CONFIRMED/GAP/NOTE findings
 - Disabled with `--no-verify` flag
 - First use on Firestorm Labs caught: $47M Series A, $100M Air Force IDIQ, HP partnership — all missing from Aperture data
+
+### Web Enrichment Pipeline
+- `scripts/enrich_entity.py` uses two-phase Claude approach (search → structure) for reliable JSON extraction
+- Findings staged in `enrichment_findings` table with confidence levels (high/medium/low)
+- Ingested records tagged with `source = "web_enrichment:{url}"` for provenance tracking
+- `parent_event_id` on `funding_events` links enriched round amounts to original EDGAR filings — prevents double-counting while preserving audit trail
+- Private Capital query uses: `WHERE id NOT IN (SELECT parent_event_id FROM funding_events WHERE parent_event_id IS NOT NULL)` to exclude superseded rows
+- Dedup checks run during staging: contract value within 10% + same agency + date within 90 days; funding same round_stage + date within 6 months
+- Auto-approve mode available for high-confidence findings (>90% approval rate threshold)
+- Batch mode supports `priority_entities.txt` file for systematic enrichment before report delivery
+
+### Bug Fixes Applied (Feb 27, 2026)
+- **NULL contract dates:** `ORDER BY CASE WHEN award_date IS NULL THEN 1 ELSE 0 END, award_date` in Government Traction + Lifecycle queries
+- **Lifecycle narrative crash:** Filters to `dated_contracts` before selecting earliest; falls back to count-based narrative
+- **Funding double-counting:** `parent_event_id` schema change (migration 351c28b78ecd) + `build_private_capital()` excludes superseded rows
+- **Verification dedup:** Prompt now includes contract/funding details, not just counts
+- **Darkhive series_b mislabel:** Fixed to series_a for $21M Aug 2024 round
+- **DARKHIVE INC. all-caps:** Normalized to Darkhive Inc. throughout brief
 
 ### New Machine Setup (Feb 19, 2026)
 - Code synced via git, venv recreated at `~/projects/defense-alpha/venv`
@@ -785,6 +1027,8 @@ One-liner: "Aperture tells defense investors where the government's money is goi
 | RAG engine | `processing/rag_engine.py` |
 | RAG CLI | `scripts/rag_query.py` |
 | Deal intelligence briefs | `scripts/aperture_query.py` |
+| Web enrichment pipeline | `scripts/enrich_entity.py` |
+| Branded PDF generator | `scripts/generate_darkhive_pdf.py` |
 | Report generation (prospects) | `scripts/generate_prospect_report.py` |
 | Report generation (PDF) | `scripts/generate_pdf_report.py` |
 | Report generation (Phase II) | `scripts/generate_phase2_pdf.py` |
@@ -802,6 +1046,9 @@ One-liner: "Aperture tells defense investors where the government's money is goi
 | Analyst note PDF | `scripts/generate_analyst_note.py` |
 | Policy config | `config/policy_priorities.yaml` |
 | DB models | `processing/models.py` |
+| Fund manager CLI | `Fund/fund_manager.py` |
+| Fund table creation | `Fund/create_fund_tables.py` |
+| Fund strategy configs | `Fund/strategies/*.json` |
 
 ---
 
@@ -817,7 +1064,7 @@ One-liner: "Aperture tells defense investors where the government's money is goi
 
 **Key validation:** Funding raise detector shows 80% true prediction rate with 35-month median lead time. SBIR phase transitions predict private capital raises ~3 years ahead — this is the core defensible insight. Phase II Signal report ($8.48B across 164 companies) is the proof point.
 
-Don (first client) feedback: "All new SBIR companies to me!" He suggested targeting VCs + Primes as customers ("matchmaker" positioning).
+Don (first client) feedback: "All new SBIR companies to me!" on RF report. Validated investor leads report had companies new to him. Third deliverable (Darkhive brief) delivered; Don asked "how can you make money making connections?" — confirmed demand but Danny clarified lane: intelligence reports are the product, not introductions (active duty constraint). Pricing conversation triggers on next request.
 
 **Rebrand:** Defense Alpha → Aperture Signals across 17 files. Domain: aperturesignals.com (live). Database filename remains `defense_alpha.db` (intentional).
 
