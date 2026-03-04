@@ -1,0 +1,24 @@
+{
+    "name": "Policy Tailwind",
+    "description": "Companies with highest alignment to top-growing defense budget areas (space resilience, autonomous systems). Thesis: companies whose technology maps to areas of increasing Congressional appropriation will see outsized contract flow.",
+    "target_cohort_size": 20,
+    "deployment_frequency": "quarterly",
+    "selection_criteria": {
+        "eligible_universe": {
+            "entity_types": ["STARTUP"],
+            "min_sbir_phase2": 1,
+            "exclude_gone_stale": true,
+            "exclude_merged": true,
+            "require_classified": true
+        },
+        "ranking": {
+            "primary_sort": "policy_tailwind_score",
+            "secondary_sort": "freshness_adjusted_score",
+            "descending": true
+        },
+        "filters": {
+            "min_policy_tailwind": 0.3,
+            "excluded_signals": ["sbir_stalled", "gone_stale"]
+        }
+    }
+}

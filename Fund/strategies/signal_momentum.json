@@ -1,0 +1,23 @@
+{
+    "name": "Signal Momentum",
+    "description": "Companies with the strongest recent signal activity, regardless of whether they have raised private capital yet. Thesis: high freshness-adjusted composite scores indicate companies on a trajectory of increasing defense relevance and traction.",
+    "target_cohort_size": 20,
+    "deployment_frequency": "quarterly",
+    "selection_criteria": {
+        "eligible_universe": {
+            "entity_types": ["STARTUP"],
+            "min_composite_score": 2.0,
+            "exclude_gone_stale": true,
+            "exclude_merged": true,
+            "require_classified": true
+        },
+        "ranking": {
+            "primary_sort": "freshness_adjusted_score",
+            "secondary_sort": "composite_score",
+            "descending": true
+        },
+        "filters": {
+            "excluded_signals": ["sbir_stalled", "gone_stale"]
+        }
+    }
+}

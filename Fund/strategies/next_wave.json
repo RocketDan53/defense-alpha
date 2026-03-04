@@ -1,0 +1,24 @@
+{
+    "name": "Next Wave",
+    "description": "SBIR Phase II graduates with no private capital yet. The 3,221 company pipeline of defense startups that have proven technology through SBIR but haven't yet attracted VC attention. Thesis: these companies are undervalued because the market lacks visibility into their government traction.",
+    "target_cohort_size": 20,
+    "deployment_frequency": "quarterly",
+    "selection_criteria": {
+        "eligible_universe": {
+            "entity_types": ["STARTUP"],
+            "min_sbir_phase2": 1,
+            "max_regd_filings": 0,
+            "exclude_gone_stale": true,
+            "exclude_merged": true,
+            "require_classified": true
+        },
+        "ranking": {
+            "primary_sort": "freshness_adjusted_score",
+            "secondary_sort": "policy_tailwind_score",
+            "descending": true
+        },
+        "filters": {
+            "excluded_signals": ["sbir_stalled", "gone_stale"]
+        }
+    }
+}

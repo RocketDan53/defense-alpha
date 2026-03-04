@@ -454,6 +454,11 @@ class RelationshipType(PyEnum):
     SIMILAR_TECHNOLOGY = "similar_technology"        # Embedding cosine similarity
     COMPETES_WITH = "competes_with"                 # Same tech cluster
     ALIGNED_TO_POLICY = "aligned_to_policy"         # Policy alignment score
+    # MEIA/KOP/JAR acquisition reform relationships
+    ALIGNED_TO_KOP = "aligned_to_kop"               # Company aligned to KOP
+    IN_PAE_PORTFOLIO = "in_pae_portfolio"            # Company in PAE portfolio
+    MEIA_PARTICIPANT = "meia_participant"            # MEIA experimentation
+    JAR_RECIPIENT = "jar_recipient"                  # JAR funding recipient
 
 
 class Relationship(Base):
@@ -787,3 +792,251 @@ class EnrichmentFinding(Base):
 
     def __repr__(self) -> str:
         return f"<EnrichmentFinding(type={self.finding_type}, status={self.status})>"
+
+
+# ── Fund System Enums ────────────────────────────────────────────────────
+
+
+class StrategyStatus(PyEnum):
+    """Lifecycle of a fund strategy."""
+    DRAFT = "draft"
+    ACTIVE = "active"
+    PAUSED = "paused"
+    RETIRED = "retired"
+
+
+class CohortType(PyEnum):
+    """Whether a cohort is signal-selected or a random baseline."""
+    SIGNAL = "signal"
+    BENCHMARK = "benchmark"
+
+
+class PositionStatus(PyEnum):
+    """Lifecycle of a position within a cohort."""
+    ACTIVE = "active"
+    TERMINAL_ACQUIRED = "terminal_acquired"
+    TERMINAL_INACTIVE = "terminal_inactive"
+    TERMINAL_MERGED = "terminal_merged"
+
+
+class MilestoneType(PyEnum):
+    """Observable events tracked after a company enters a cohort."""
+    FUNDING_RAISE = "funding_raise"
+    NEW_CONTRACT = "new_contract"
+    SBIR_ADVANCE = "sbir_advance"
+    LIFECYCLE_ADVANCE = "lifecycle_advance"
+    COMPOSITE_SCORE_INCREASE = "composite_score_increase"
+    NEW_AGENCY = "new_agency"
+    ACQUISITION = "acquisition"
+    GONE_STALE = "gone_stale"
+
+
+# ── Fund System Models ───────────────────────────────────────────────────
+
+
+class FundStrategy(Base):
+    """
+    A thesis definition for the notional fund.
+
+    Stores selection criteria as structured JSON so strategies are
+    reproducible and auditable.
+    """
+
+    __tablename__ = "fund_strategies"
+
+    id: Mapped[str] = mapped_column(
+        String(36), primary_key=True, default=generate_uuid
+    )
+    name: Mapped[str] = mapped_column(Text, nullable=False, unique=True)
+    description: Mapped[Optional[str]] = mapped_column(Text)
+    status: Mapped[StrategyStatus] = mapped_column(
+        Enum(StrategyStatus), default=StrategyStatus.DRAFT, nullable=False, index=True
+    )
+    selection_criteria: Mapped[dict] = mapped_column(JSON, nullable=False)
+    target_cohort_size: Mapped[int] = mapped_column(
+        Numeric(4, 0), default=20
+    )
+    deployment_frequency: Mapped[str] = mapped_column(
+        String(20), default="quarterly"
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, default=func.now(), nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, default=func.now(), onupdate=func.now(), nullable=False
+    )
+
+    # Relationships
+    cohorts: Mapped[list["FundCohort"]] = relationship(
+        back_populates="strategy", cascade="all, delete-orphan"
+    )
+
+    __table_args__ = (
+        Index("ix_strategies_status", "status"),
+    )
+
+    def __repr__(self) -> str:
+        return f"<FundStrategy(name={self.name}, status={self.status})>"
+
+
+class FundCohort(Base):
+    """
+    A vintage deployment within a strategy.
+
+    One strategy can have many cohorts over time (Q1 2026, Q2 2026, etc.).
+    Each signal cohort gets a paired benchmark cohort for comparison.
+    """
+
+    __tablename__ = "fund_cohorts"
+
+    id: Mapped[str] = mapped_column(
+        String(36), primary_key=True, default=generate_uuid
+    )
+    strategy_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("fund_strategies.id"), nullable=False, index=True
+    )
+    cohort_type: Mapped[CohortType] = mapped_column(
+        Enum(CohortType), nullable=False, index=True
+    )
+    vintage_label: Mapped[str] = mapped_column(
+        String(20), nullable=False
+    )
+    deployed_at: Mapped[date] = mapped_column(
+        Date, nullable=False, index=True
+    )
+    paired_cohort_id: Mapped[Optional[str]] = mapped_column(
+        String(36), ForeignKey("fund_cohorts.id"), nullable=True
+    )
+    selection_metadata: Mapped[Optional[dict]] = mapped_column(JSON)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, default=func.now(), nullable=False
+    )
+
+    # Relationships
+    strategy: Mapped["FundStrategy"] = relationship(back_populates="cohorts")
+    positions: Mapped[list["FundPosition"]] = relationship(
+        back_populates="cohort", cascade="all, delete-orphan"
+    )
+    paired_cohort: Mapped[Optional["FundCohort"]] = relationship(
+        "FundCohort", remote_side="FundCohort.id",
+        foreign_keys=[paired_cohort_id],
+    )
+
+    __table_args__ = (
+        Index("ix_cohorts_strategy_vintage", "strategy_id", "vintage_label"),
+        UniqueConstraint(
+            "strategy_id", "vintage_label", "cohort_type",
+            name="uq_cohort_strategy_vintage_type",
+        ),
+    )
+
+    def __repr__(self) -> str:
+        return f"<FundCohort(vintage={self.vintage_label}, type={self.cohort_type})>"
+
+
+class FundPosition(Base):
+    """
+    A company within a cohort.
+
+    Captures full state at selection time (the 'investment memo') so you
+    can always look back at what signals said when you 'invested'.
+    """
+
+    __tablename__ = "fund_positions"
+
+    id: Mapped[str] = mapped_column(
+        String(36), primary_key=True, default=generate_uuid
+    )
+    cohort_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("fund_cohorts.id"), nullable=False, index=True
+    )
+    entity_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("entities.id"), nullable=False, index=True
+    )
+    status: Mapped[PositionStatus] = mapped_column(
+        Enum(PositionStatus), default=PositionStatus.ACTIVE, nullable=False, index=True
+    )
+    status_changed_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
+
+    # Frozen state at entry
+    entry_composite_score: Mapped[Optional[Decimal]] = mapped_column(Numeric(5, 2))
+    entry_freshness_adjusted_score: Mapped[Optional[Decimal]] = mapped_column(Numeric(5, 2))
+    entry_policy_tailwind: Mapped[Optional[Decimal]] = mapped_column(Numeric(3, 2))
+    entry_lifecycle_stage: Mapped[Optional[str]] = mapped_column(String(50))
+    entry_signals: Mapped[Optional[dict]] = mapped_column(JSON)
+    entry_sbir_count: Mapped[Optional[int]] = mapped_column(Numeric(6, 0))
+    entry_contract_count: Mapped[Optional[int]] = mapped_column(Numeric(6, 0))
+    entry_contract_value: Mapped[Optional[Decimal]] = mapped_column(Numeric(18, 2))
+    entry_regd_count: Mapped[Optional[int]] = mapped_column(Numeric(6, 0))
+    entry_regd_value: Mapped[Optional[Decimal]] = mapped_column(Numeric(18, 2))
+
+    snapshot_id: Mapped[Optional[str]] = mapped_column(
+        String(36), ForeignKey("entity_snapshots.id"), nullable=True
+    )
+    selection_rank: Mapped[Optional[int]] = mapped_column(Numeric(4, 0))
+    selection_reason: Mapped[Optional[str]] = mapped_column(Text)
+    entered_at: Mapped[datetime] = mapped_column(
+        DateTime, default=func.now(), nullable=False
+    )
+
+    # Relationships
+    cohort: Mapped["FundCohort"] = relationship(back_populates="positions")
+    entity: Mapped["Entity"] = relationship("Entity")
+    milestones: Mapped[list["FundMilestone"]] = relationship(
+        back_populates="position", cascade="all, delete-orphan"
+    )
+
+    __table_args__ = (
+        UniqueConstraint("cohort_id", "entity_id", name="uq_position_cohort_entity"),
+        Index("ix_positions_entity_status", "entity_id", "status"),
+    )
+
+    def __repr__(self) -> str:
+        return f"<FundPosition(entity={self.entity_id}, status={self.status})>"
+
+
+class FundMilestone(Base):
+    """
+    Observable event after entry into a cohort.
+
+    Links back to the position and captures delta from entry state.
+    """
+
+    __tablename__ = "fund_milestones"
+
+    id: Mapped[str] = mapped_column(
+        String(36), primary_key=True, default=generate_uuid
+    )
+    position_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("fund_positions.id"), nullable=False, index=True
+    )
+    entity_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("entities.id"), nullable=False, index=True
+    )
+    milestone_type: Mapped[MilestoneType] = mapped_column(
+        Enum(MilestoneType), nullable=False, index=True
+    )
+    milestone_date: Mapped[date] = mapped_column(
+        Date, nullable=False, index=True
+    )
+    milestone_value: Mapped[Optional[Decimal]] = mapped_column(Numeric(18, 2))
+    months_since_entry: Mapped[Optional[int]] = mapped_column(Numeric(4, 0))
+    details: Mapped[Optional[dict]] = mapped_column(JSON)
+    source_key: Mapped[Optional[str]] = mapped_column(
+        Text, unique=True, index=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, default=func.now(), nullable=False
+    )
+
+    # Relationships
+    position: Mapped["FundPosition"] = relationship(back_populates="milestones")
+    entity: Mapped["Entity"] = relationship("Entity")
+
+    __table_args__ = (
+        Index("ix_milestones_position_type", "position_id", "milestone_type"),
+        Index("ix_milestones_date_type", "milestone_date", "milestone_type"),
+    )
+
+    def __repr__(self) -> str:
+        return f"<FundMilestone(type={self.milestone_type}, date={self.milestone_date})>"
