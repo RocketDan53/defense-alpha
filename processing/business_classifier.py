@@ -51,6 +51,7 @@ from sqlalchemy.orm import Session
 from config.settings import settings
 from processing.database import SessionLocal
 from processing.models import (
+    Contract,
     CoreBusiness,
     Entity,
     EntityType,
@@ -93,6 +94,50 @@ LOCATION: {location}
 
 SBIR AWARDS ({award_count} total):
 {sbir_list}
+
+Respond with JSON only:
+{{
+  "classification": "<one of: rf_hardware, software, systems_integrator, aerospace_platforms, components, services, other>",
+  "confidence": <0.0-1.0>,
+  "reasoning": "<1-2 sentences explaining what they build and why this category>"
+}}"""
+
+
+CONTRACT_CLASSIFICATION_PROMPT = """You are an analyst classifying defense/aerospace companies based on their government contract data.
+
+This company has NO SBIR awards, so you are classifying based on federal contracts only.
+
+Your task: Based on the contract data below (agencies, NAICS codes, PSC codes, values, procurement types), determine what this company primarily BUILDS or SELLS.
+
+IMPORTANT DISTINCTION:
+- Focus on what they BUILD/MANUFACTURE/SELL, not what technology they USE or INTEGRATE
+- PSC code guidance:
+  - 1000-1999: Weapons/ammunition → likely aerospace_platforms or components
+  - 5800-5999: Communication/detection equipment → likely rf_hardware
+  - 7000-7999: IT/ADP equipment → likely software
+  - AC-AZ, B, C codes: R&D services → check agency for domain
+  - D codes: IT and telecom services → likely software or services
+  - H codes: Quality control/testing → likely services or components
+- NAICS guidance:
+  - 334: Computer/electronic manufacturing → rf_hardware or components
+  - 336: Transportation equipment → aerospace_platforms
+  - 541: Professional/scientific/technical → services or software
+  - 332: Fabricated metal → components
+
+CATEGORIES (choose exactly one):
+- rf_hardware: Company builds RF/radio/antenna/radar/EW hardware as their primary product
+- software: Company builds software products (apps, platforms, algorithms, AI/ML systems)
+- systems_integrator: Company integrates others' hardware/software into complete solutions
+- aerospace_platforms: Company builds complete aircraft, spacecraft, drones, satellites, or vehicles
+- components: Company builds parts, subsystems, materials, or manufacturing equipment
+- services: Company provides consulting, training, testing, or R&D services (not products)
+- other: Doesn't clearly fit any category above
+
+COMPANY: {company_name}
+LOCATION: {location}
+
+CONTRACTS ({contract_count} total, ${total_value:,.0f} total value):
+{contract_list}
 
 Respond with JSON only:
 {{
@@ -169,6 +214,43 @@ def format_sbir_list(awards: list[dict]) -> str:
         )
     if len(awards) > 10:
         lines.append(f"\n... and {len(awards) - 10} more awards")
+    return "\n".join(lines)
+
+
+def get_contracts(db: Session, entity_id: str) -> list[dict]:
+    """Get all contracts for an entity."""
+    contracts = (
+        db.query(Contract)
+        .filter(Contract.entity_id == entity_id)
+        .order_by(Contract.award_date.desc())
+        .all()
+    )
+
+    result = []
+    for c in contracts:
+        result.append({
+            "agency": c.contracting_agency or "Unknown",
+            "naics_code": c.naics_code or "N/A",
+            "psc_code": c.psc_code or "N/A",
+            "value": float(c.contract_value) if c.contract_value else 0,
+            "date": str(c.award_date) if c.award_date else "N/A",
+            "procurement_type": c.procurement_type or "standard",
+        })
+    return result
+
+
+def format_contract_list(contracts: list[dict]) -> str:
+    """Format contracts for the prompt."""
+    lines = []
+    for i, c in enumerate(contracts[:10], 1):  # Limit to 10 most recent
+        value_str = f"${c['value']:,.0f}" if c['value'] else "N/A"
+        lines.append(
+            f"{i}. Agency: {c['agency']}\n"
+            f"   NAICS: {c['naics_code']} | PSC: {c['psc_code']} | "
+            f"Value: {value_str} | Type: {c['procurement_type']} | Date: {c['date']}"
+        )
+    if len(contracts) > 10:
+        lines.append(f"\n... and {len(contracts) - 10} more contracts")
     return "\n".join(lines)
 
 
@@ -277,6 +359,242 @@ def prefetch_entity_data(db: Session, entities: list[Entity]) -> list[dict]:
             "awards": awards,
         })
     return data_list
+
+
+def prefetch_contract_data(db: Session, entities: list[Entity]) -> list[dict]:
+    """Pre-fetch all entity data including contracts for async processing."""
+    data_list = []
+    for entity in entities:
+        contracts = get_contracts(db, entity.id)
+        data_list.append({
+            "id": entity.id,
+            "name": entity.canonical_name,
+            "location": entity.headquarters_location or "Unknown",
+            "contracts": contracts,
+            "source": "contracts",
+        })
+    return data_list
+
+
+async def classify_entity_from_contracts_async(
+    client: AsyncAnthropic,
+    entity_data: dict,
+    model: str = "claude-sonnet-4-20250514",
+) -> Optional[ClassificationResult]:
+    """
+    Async: Classify a single entity using contract data instead of SBIR awards.
+    """
+    contracts = entity_data["contracts"]
+    entity_id = entity_data["id"]
+    entity_name = entity_data["name"]
+
+    if not contracts:
+        logger.warning(f"No contracts found for {entity_name}")
+        return None
+
+    total_value = sum(c["value"] for c in contracts)
+    contract_list = format_contract_list(contracts)
+    prompt = CONTRACT_CLASSIFICATION_PROMPT.format(
+        company_name=entity_name,
+        location=entity_data["location"],
+        contract_count=len(contracts),
+        total_value=total_value,
+        contract_list=contract_list,
+    )
+
+    try:
+        response = await client.messages.create(
+            model=model,
+            max_tokens=500,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        raw_text = response.content[0].text.strip()
+
+        # Parse JSON response - handle potential markdown code blocks
+        if raw_text.startswith("```"):
+            raw_text = raw_text.split("```")[1]
+            if raw_text.startswith("json"):
+                raw_text = raw_text[4:]
+            raw_text = raw_text.strip()
+
+        result = json.loads(raw_text)
+
+        classification_str = result.get("classification", "other").lower()
+        try:
+            classification = CoreBusiness(classification_str)
+        except ValueError:
+            logger.warning(f"Unknown classification '{classification_str}', defaulting to OTHER")
+            classification = CoreBusiness.OTHER
+
+        reasoning = result.get("reasoning", "")
+        reasoning = f"[contract-based classification] {reasoning}"
+
+        return ClassificationResult(
+            entity_id=entity_id,
+            entity_name=entity_name,
+            classification=classification,
+            confidence=float(result.get("confidence", 0.5)),
+            reasoning=reasoning,
+            sbir_count=0,
+            raw_response=raw_text,
+        )
+
+    except json.JSONDecodeError as e:
+        logger.error(f"Failed to parse JSON for {entity_name}: {e}")
+        return None
+    except Exception as e:
+        logger.error(f"Classification failed for {entity_name}: {e}")
+        return None
+
+
+async def process_contract_entity_with_semaphore(
+    semaphore: asyncio.Semaphore,
+    client: AsyncAnthropic,
+    entity_data: dict,
+    index: int,
+    total: int,
+    model: str,
+) -> tuple[int, Optional[ClassificationResult]]:
+    """Process a single contract-based entity with semaphore for rate limiting."""
+    async with semaphore:
+        logger.info(f"[{index}/{total}] {entity_data['name']} ({len(entity_data['contracts'])} contracts)")
+        result = await classify_entity_from_contracts_async(client, entity_data, model=model)
+        return index, result
+
+
+async def run_contract_classification_async(
+    db: Session,
+    client: AsyncAnthropic,
+    limit: Optional[int] = None,
+    dry_run: bool = False,
+    model: str = "claude-sonnet-4-20250514",
+    concurrency: int = 10,
+    skip_classified: bool = False,
+) -> ClassifierStats:
+    """
+    Async: Run classification on entities with contracts but no SBIR awards.
+    """
+    stats = ClassifierStats()
+
+    # Get entities with contracts but no SBIR awards
+    sbir_types = [
+        FundingEventType.SBIR_PHASE_1,
+        FundingEventType.SBIR_PHASE_2,
+        FundingEventType.SBIR_PHASE_3,
+    ]
+    entity_ids_with_sbir = (
+        db.query(FundingEvent.entity_id)
+        .filter(FundingEvent.event_type.in_(sbir_types))
+        .distinct()
+        .subquery()
+    )
+    entity_ids_with_contracts = (
+        db.query(Contract.entity_id)
+        .distinct()
+        .subquery()
+    )
+    query = (
+        db.query(Entity)
+        .filter(
+            Entity.id.in_(entity_ids_with_contracts),
+            ~Entity.id.in_(entity_ids_with_sbir),
+            Entity.merged_into_id.is_(None),
+            Entity.entity_type == EntityType.STARTUP,
+        )
+    )
+    if skip_classified:
+        query = query.filter(
+            (Entity.core_business.is_(None)) | (Entity.core_business == CoreBusiness.UNCLASSIFIED)
+        )
+    entities = query.all()
+
+    if limit:
+        entities = entities[:limit]
+
+    logger.info("=" * 70)
+    logger.info("BUSINESS CLASSIFIER — CONTRACT-BASED (ASYNC)")
+    logger.info("=" * 70)
+    logger.info(f"Entities to process: {len(entities)}")
+    logger.info(f"Model: {model}")
+    logger.info(f"Concurrency: {concurrency}")
+    logger.info(f"Mode: {'DRY RUN' if dry_run else 'LIVE'}")
+    logger.info("=" * 70)
+
+    # Pre-fetch all entity data synchronously
+    logger.info("Pre-fetching contract data...")
+    entity_data_list = prefetch_contract_data(db, entities)
+    logger.info(f"Pre-fetched {len(entity_data_list)} entities\n")
+
+    # Create semaphore for rate limiting
+    semaphore = asyncio.Semaphore(concurrency)
+
+    # Create all tasks
+    tasks = [
+        process_contract_entity_with_semaphore(
+            semaphore, client, entity_data, i, len(entity_data_list), model
+        )
+        for i, entity_data in enumerate(entity_data_list, 1)
+    ]
+
+    # Run all tasks concurrently
+    results = await asyncio.gather(*tasks)
+
+    # Process results and save to database
+    low_confidence_results = []
+
+    for index, result in results:
+        stats.total_processed += 1
+
+        if result:
+            stats.successful += 1
+            stats.by_category[result.classification.value] = (
+                stats.by_category.get(result.classification.value, 0) + 1
+            )
+
+            conf_indicator = "LOW" if result.confidence < 0.7 else "OK "
+            if result.confidence < 0.7:
+                stats.low_confidence += 1
+                low_confidence_results.append(result)
+
+            logger.info(
+                f"  -> {result.entity_name}: {result.classification.value:20} "
+                f"(conf: {result.confidence:.2f} {conf_indicator})"
+            )
+
+            save_classification(db, result, dry_run=dry_run)
+        else:
+            stats.failed += 1
+            entity_data = entity_data_list[index - 1]
+            logger.error(f"  -> {entity_data['name']}: FAILED")
+
+    # Summary
+    logger.info("\n" + "=" * 70)
+    logger.info("SUMMARY")
+    logger.info("=" * 70)
+    logger.info(f"Total processed: {stats.total_processed}")
+    logger.info(f"Successful: {stats.successful}")
+    logger.info(f"Failed: {stats.failed}")
+    logger.info(f"Low confidence (<0.7): {stats.low_confidence}")
+    logger.info("")
+    logger.info("By category:")
+    for cat, count in sorted(stats.by_category.items(), key=lambda x: -x[1]):
+        logger.info(f"  {cat:20}: {count}")
+
+    if low_confidence_results:
+        logger.info("\n" + "-" * 70)
+        logger.info("LOW CONFIDENCE CLASSIFICATIONS (manual review recommended):")
+        logger.info("-" * 70)
+        for r in low_confidence_results:
+            logger.info(f"  {r.entity_name}")
+            logger.info(f"    -> {r.classification.value} (conf: {r.confidence:.2f})")
+            logger.info(f"    -> {r.reasoning}")
+
+    if dry_run:
+        logger.info("\nDRY RUN - no changes saved to database.")
+    else:
+        logger.info("\nClassifications saved to database.")
+
+    return stats
 
 
 async def classify_entity_async(
@@ -719,6 +1037,11 @@ def main():
         action="store_true",
         help="Skip entities that already have core_business classifications",
     )
+    parser.add_argument(
+        "--contracts-only",
+        action="store_true",
+        help="Classify entities with contracts but no SBIR awards (contract-based classification)",
+    )
 
     args = parser.parse_args()
 
@@ -749,7 +1072,16 @@ def main():
             async_client = AsyncAnthropic(api_key=api_key)
 
             async def run_async():
-                if args.test:
+                if args.contracts_only:
+                    return await run_contract_classification_async(
+                        db, async_client,
+                        limit=args.limit,
+                        dry_run=args.dry_run,
+                        model=args.model,
+                        concurrency=args.concurrency,
+                        skip_classified=args.skip_classified,
+                    )
+                elif args.test:
                     return await run_classification_async(
                         db, async_client,
                         entity_names=test_companies,
@@ -785,7 +1117,10 @@ def main():
             # Sync sequential mode
             client = Anthropic(api_key=api_key)
 
-            if args.test:
+            if args.contracts_only:
+                logger.error("--contracts-only requires --async mode")
+                sys.exit(1)
+            elif args.test:
                 run_classification(
                     db, client,
                     entity_names=test_companies,

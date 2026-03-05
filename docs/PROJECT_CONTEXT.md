@@ -1,6 +1,6 @@
 # Aperture Signals: Project Context
 
-**Last Updated:** March 3, 2026
+**Last Updated:** March 3, 2026 (evening)
 **Purpose:** Spin up a new Claude instance with full context on the Aperture Signals project
 
 ---
@@ -45,7 +45,7 @@ A Python-based defense intelligence platform that aggregates government and priv
 | Relationships | 39,712 | - | Knowledge graph (rebuilt Feb 24) |
 | Entity Merges | 834 | - | High-confidence auto-merges |
 | Review Queue | 201,328 | - | Pairs flagged for manual review |
-| Fund Positions | 40 | - | First cohort: Next Wave Q1 2026 (20 signal + 20 benchmark) |
+| Fund Positions | 120 | - | All 3 strategies deployed Q1 2026 (60 signal + 60 benchmark, 58 unique companies) |
 
 ---
 
@@ -71,7 +71,9 @@ A Python-based defense intelligence platform that aggregates government and priv
 - Analyst note PDF generator (`scripts/generate_analyst_note.py`) — one-page branded PDF for client-facing competitive positioning notes
 - SEC EDGAR Form D competitor research — EDGAR API integration for capitalization tiering of competitors by Reg D filing amounts
 - Key Contacts & Investor Syndicate section — new standard brief section with company leadership, investor syndicate with named individuals, and network analysis notes (Feb 27)
-- Notional fund system (`Fund/fund_manager.py`) — VC-style portfolio construct for thesis validation; strategy definition, cohort deployment with paired random benchmarks, milestone tracking, performance reporting; 3 strategies defined (Next Wave, Policy Tailwind, Signal Momentum); first cohort deployed Q1 2026 (Mar 3)
+- Notional fund system (`Fund/fund_manager.py`) — VC-style portfolio construct for thesis validation; strategy definition, cohort deployment with matched-pair benchmarks + bootstrap baselines, milestone tracking, performance reporting; 3 strategies deployed Q1 2026 (Next Wave, Policy Tailwind, Signal Momentum); 120 positions (60 signal + 60 matched benchmark), 58 unique companies (Mar 3)
+- Fund redeployment tool (`Fund/redeploy_fund.py`) — drops existing cohorts for a vintage and provides redeployment instructions; supports `--dry-run`
+- Fund overview PDF generator (`Fund/generate_fund_overview.py`) — branded one-sheeter with strategy summaries, portfolio tables, entry-state differentials, benchmark methodology, and disclaimer; uses reportlab
 
 ---
 
@@ -433,14 +435,15 @@ python scripts/enrich_entity.py --review  # Review pending enrichments
 ```
 
 ### 16. Notional Fund System ✅ COMPLETE
-**Files:** `Fund/fund_manager.py`, `Fund/create_fund_tables.py`, `Fund/strategies/*.json`
+**Files:** `Fund/fund_manager.py`, `Fund/create_fund_tables.py`, `Fund/redeploy_fund.py`, `Fund/generate_fund_overview.py`, `Fund/strategies/*.json`
 
-VC-style portfolio construct that tests Aperture's signal-based thesis in real time. Deploys signal-selected cohorts against random benchmarks and tracks milestone hit rates to measure differential alpha.
+VC-style portfolio construct that tests Aperture's signal-based thesis in real time. Deploys signal-selected cohorts against matched-pair benchmarks and tracks milestone hit rates to measure differential alpha.
 
 **Design principles:**
 - Buy-and-hold positions (no exits except terminal events) — matches defense VC reality
 - Milestone-based performance measurement (not IRR/TVPI) — measurable in quarters, not decades
-- Simultaneous benchmark deployment from same eligible universe — ensures fair comparison
+- Matched-pair benchmarks from same eligible universe — each signal company paired with nearest neighbor on observable characteristics, isolating the test variable
+- Bootstrap baselines (100 random draws) computed at deploy time for confidence intervals
 - Entry state frozen at selection time — every position captures the full signal profile that justified inclusion
 
 **Components:**
@@ -456,7 +459,11 @@ VC-style portfolio construct that tests Aperture's signal-based thesis in real t
 | Policy Tailwind | Highest alignment to top-growth budget areas (space +38%, autonomous +10%) | ~3,044 companies |
 | Signal Momentum | Strongest recent signal activity regardless of funding history | ~2,386 companies |
 
-**First deployment:** Next Wave Q1 2026 — 20 signal positions (entry scores 5.09→3.58) vs 20 random benchmark positions (avg ~1.3). Clear differential at entry; milestone tracking measures whether this translates to outcome alpha.
+**Q1 2026 deployment (all 3 strategies):**
+- **Next Wave:** 20 signal (adj 3.58–5.09) vs 20 matched benchmark (avg 2.89); match vars: sbir_count, contract_count, contract_value_log, core_business, policy_tailwind_score
+- **Policy Tailwind:** 20 signal (policy 0.90 across board) vs 20 matched benchmark (avg policy 0.54); match vars: sbir_count, contract_count, contract_value_log, core_business, freshness_adjusted_score
+- **Signal Momentum:** 20 signal (adj 4.62–7.25, Defense Unicorns #1) vs 20 matched benchmark (avg 3.02); match vars: sbir_count, contract_count, contract_value_log, core_business, policy_tailwind_score
+- 120 total positions (60 signal + 60 benchmark), 58 unique companies (2 appear in multiple strategies)
 
 **Milestone types tracked:**
 - FUNDING_RAISE — New Reg D / VC round after entry
@@ -478,9 +485,13 @@ python Fund/fund_manager.py strategy activate --name "Next Wave"
 python Fund/fund_manager.py strategy list
 python Fund/fund_manager.py strategy show --name "Next Wave"
 
-# Cohort deployment
+# Cohort deployment (matched-pair + bootstrap)
 python Fund/fund_manager.py deploy --strategy "Next Wave" --vintage "2026-Q1" --dry-run
 python Fund/fund_manager.py deploy --strategy "Next Wave" --vintage "2026-Q1"
+
+# Redeployment (drop + redeploy all strategies for a vintage)
+python Fund/redeploy_fund.py --dry-run
+python Fund/redeploy_fund.py
 
 # Milestone tracking
 python Fund/fund_manager.py track --since 2026-01-01 --dry-run
@@ -489,6 +500,9 @@ python Fund/fund_manager.py track --since 2026-01-01
 # Performance reporting
 python Fund/fund_manager.py performance --strategy "Next Wave"
 python Fund/fund_manager.py performance --all
+
+# Fund overview one-sheeter PDF
+python Fund/generate_fund_overview.py --vintage 2026-Q1 --output reports/fund_overview_2026_q1.pdf
 ```
 
 ---
@@ -588,6 +602,11 @@ combined = 0.55 x norm_composite + 0.30 x policy_tailwind + 0.15 x contract_tier
 
 **Rationale:** The 80% prediction rate and 35-month lead time are historical backtests. A notional fund creates dated, documented picks measured against random baselines — the difference between "our backtest looks good" and "here's what we called in real time." The fund also becomes the most compelling sales artifact for client conversations: it demonstrates Aperture trusts its own signals enough to bet on them. Designed with VC constraints (buy-and-hold, no exits) and VC-relevant metrics (milestone hit rates, not IRR) because that matches how the client base actually deploys capital.
 
+### 18. Matched-Pair Benchmarks over Random Benchmarks
+**Decision:** Replaced random benchmark selection with matched-pair nearest-neighbor. For each signal company, the benchmark is the closest match on observable characteristics (SBIR count, contract count, contract value, core business, policy tailwind/signal score) from the same eligible universe, excluding the test variable. Bootstrap baselines (100 random draws) computed at deploy time for confidence intervals.
+
+**Rationale:** Random benchmarks don't control for observable differences — a signal company with 30 SBIRs and $50M in contracts compared to a random company with 2 SBIRs proves nothing about signal quality. Matched-pair isolates the specific dimension being tested (signal strength, policy alignment, or momentum) by holding everything else constant. If the signal cohort still outperforms its matched pair on milestones, the alpha comes from the signal, not from the company's size or maturity. Bootstrap baselines confirm the matched cohort is representative of the broader eligible universe.
+
 ---
 
 ## Architecture
@@ -638,6 +657,8 @@ defense-alpha/
 ├── Fund/
 │   ├── fund_manager.py         # Notional fund CLI (strategy/deploy/track/performance)
 │   ├── create_fund_tables.py   # Fund table creation
+│   ├── redeploy_fund.py        # Drop + redeploy cohorts for a vintage
+│   ├── generate_fund_overview.py  # Branded one-sheeter PDF (reportlab)
 │   └── strategies/
 │       ├── next_wave.json      # Phase II graduates, no private capital
 │       ├── policy_tailwind.json # Highest policy alignment
@@ -659,6 +680,7 @@ defense-alpha/
 │   ├── brief_darkhive.md         # Darkhive client-facing brief (contacts + client opportunity)
 │   ├── darkhive_brief.pdf        # Darkhive branded PDF for Don
 │   ├── firestorm_drone_dominance.pdf  # Firestorm analyst note (one-page PDF)
+│   ├── fund_overview_2026_q1.pdf       # Fund one-sheeter (3 strategies, 58 companies)
 │   ├── graph_space_resilience.html     # Interactive ecosystem visualizations
 │   ├── graph_autonomous_systems.html
 │   └── graph_anduril.html
@@ -806,8 +828,9 @@ Defense intelligence platform with:
 - Knowledge graph: 39,712 relationships materialized (agency, contract, policy edges)
 - Signal-response benchmarks: 3 calibrated pairs (Space Force, NDS 2018, Ukraine Drones)
 - Web enrichment pipeline: `python scripts/enrich_entity.py --entity "Company Name"` (two-phase Claude + web search → staged findings → approve → ingest)
-- Notional fund: 3 strategies (Next Wave, Policy Tailwind, Signal Momentum), Q1 2026 cohorts deployed
+- Notional fund: 3 strategies deployed Q1 2026 with matched-pair benchmarks (120 positions, 58 unique companies)
 - Fund CLI: `python Fund/fund_manager.py performance --all`
+- Fund overview PDF: `python Fund/generate_fund_overview.py --vintage 2026-Q1`
 - Deal brief generator: `python scripts/aperture_query.py --type deal --entity "Company Name"`
 - Reports delivered: Scout Space, Starfish Space, Firestorm Labs, X-Bow (enriched), Darkhive (client-facing + branded PDF), Phase II Signal, RF/Comms v2, investor leads
 - Remaining data gaps: OTA scraper paused at 752 (SAM.gov rate limit), EDGAR captures tranches not full rounds (enrichment compensates per-entity), consortium resolution needed
@@ -871,7 +894,7 @@ Aperture Signals → knowledge graph of defense capital formation
 4. Analyst notes — one-page competitive positioning PDFs with EDGAR-sourced capitalization data (Firestorm Labs)
 5. Comparables/deal intelligence (Scout Space standalone, now integrated into briefs with Jaccard tag similarity)
 6. Sector intelligence (RF/Comms v2)
-7. Notional fund system — VC-style portfolio construct with signal-selected cohorts vs random benchmarks; measures milestone hit rate differential as forward-looking thesis validation (Next Wave, Policy Tailwind, Signal Momentum strategies deployed)
+7. Notional fund system — VC-style portfolio construct with signal-selected cohorts vs matched-pair benchmarks + bootstrap baselines; measures milestone hit rate differential as forward-looking thesis validation; 3 strategies deployed Q1 2026 (120 positions, 58 unique companies); branded one-sheeter PDF (`reports/fund_overview_2026_q1.pdf`)
 
 **Elevator Pitch:**
 "Aperture maps government defense spending to private capital markets. We track every SBIR award, defense contract, and SEC filing, link them to the same companies, and detect signals that predict where private money is going to flow. Think of it as the intelligence layer between the Pentagon's budget and the investors deploying capital around it."
@@ -929,10 +952,11 @@ One-liner: "Aperture tells defense investors where the government's money is goi
 - **Partial:** `aperture_query.py` achieves single-command → markdown → optional PDF for deal briefs. RAG→sector report pipeline still needed.
 
 ### ~~12. Build notional fund system for thesis validation~~ ✅ DONE (Mar 3)
-- VC-style portfolio construct: strategy definition → cohort deployment → milestone tracking → performance reporting
-- 3 strategies defined: Next Wave (Phase II graduates), Policy Tailwind (budget-aligned), Signal Momentum (highest composite scores)
-- First cohort deployed: Next Wave Q1 2026 (20 signal + 20 benchmark)
-- Next: deploy Policy Tailwind + Signal Momentum Q1 2026 cohorts, run first milestone scan, generate performance report at 90 days (June 2026)
+- VC-style portfolio construct: strategy definition → cohort deployment (matched-pair benchmarks + bootstrap baselines) → milestone tracking → performance reporting
+- 3 strategies deployed Q1 2026: Next Wave, Policy Tailwind, Signal Momentum (120 positions, 58 unique companies)
+- Upgraded from random benchmarks to matched-pair nearest-neighbor (isolates test variable by matching on SBIR count, contract count, contract value, core business, policy/signal scores)
+- Fund overview one-sheeter PDF generated (`reports/fund_overview_2026_q1.pdf`)
+- Next: run first milestone scan, generate performance report at 90 days (June 2026)
 
 ### Medium Priority
 
@@ -1047,6 +1071,8 @@ One-liner: "Aperture tells defense investors where the government's money is goi
 | Policy config | `config/policy_priorities.yaml` |
 | DB models | `processing/models.py` |
 | Fund manager CLI | `Fund/fund_manager.py` |
+| Fund redeployment | `Fund/redeploy_fund.py` |
+| Fund overview PDF | `Fund/generate_fund_overview.py` |
 | Fund table creation | `Fund/create_fund_tables.py` |
 | Fund strategy configs | `Fund/strategies/*.json` |
 
@@ -1061,6 +1087,7 @@ One-liner: "Aperture tells defense investors where the government's money is goi
 - API LLM: Claude for classification, scoring, RAG reasoning (~$55 for full universe)
 - Future: predictive model on outcome tracking data (6-12 months)
 - RAG connects embeddings (finding) to Claude (reasoning) — `aperture_query.py` achieves single-command deal briefs; RAG→sector report pipeline still TBD
+- PDF generation: reportlab for fund overview one-sheeter (`Fund/generate_fund_overview.py`)
 
 **Key validation:** Funding raise detector shows 80% true prediction rate with 35-month median lead time. SBIR phase transitions predict private capital raises ~3 years ahead — this is the core defensible insight. Phase II Signal report ($8.48B across 164 companies) is the proof point.
 

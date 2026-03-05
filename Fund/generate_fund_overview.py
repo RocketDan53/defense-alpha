@@ -150,7 +150,7 @@ class AperturePageTemplate:
         # Header text
         canvas_obj.setFont("Helvetica-Bold", 8)
         canvas_obj.setFillColor(ACCENT_LIGHT)
-        canvas_obj.drawString(40, h - 42, "APERTURE SIGNALS")
+        canvas_obj.drawString(40, h - 42, "APERTURE")
 
         canvas_obj.setFont("Helvetica", 7)
         canvas_obj.setFillColor(TEXT_SECONDARY)
@@ -316,7 +316,7 @@ def build_pdf(fund_data: dict, output_path: str):
 
     # ── Title Block ──
     story.append(Spacer(1, 4))
-    story.append(Paragraph("Aperture Signals Notional Fund", s["title"]))
+    story.append(Paragraph("Aperture Notional Fund", s["title"]))
     story.append(Paragraph(
         f"{vintage} Vintage  |  {fund_data['total_positions']} signal positions across "
         f"{len(fund_data['strategies'])} strategies  |  "
@@ -386,7 +386,7 @@ def build_pdf(fund_data: dict, output_path: str):
         story.append(header_table)
 
         # Thesis
-        story.append(Paragraph(strat["description"][:200] + ("..." if len(strat["description"]) > 200 else ""), s["body"]))
+        story.append(Paragraph(strat["description"], s["body"]))
 
         # Entry-state differentials (compact)
         diffs = strat["differentials"]

@@ -55,6 +55,7 @@ from sqlalchemy.orm import Session
 from config.settings import settings
 from processing.database import SessionLocal
 from processing.models import (
+    Contract,
     CoreBusiness,
     Entity,
     EntityType,
@@ -189,6 +190,56 @@ Respond with JSON only:
   "reasoning": "<1-2 sentences on what makes this company strategically relevant>"
 }}"""
 
+CONTRACT_ALIGNMENT_PROMPT = """You are a defense policy analyst assessing how well a company's technology portfolio aligns with current U.S. National Defense Strategy priorities and budget growth areas.
+
+This company has NO SBIR awards, so you are assessing based on federal contract data and core business classification.
+
+COMPANY: {company_name}
+CORE BUSINESS: {core_business}
+LOCATION: {location}
+
+FEDERAL CONTRACTS ({contract_count} total, ${total_value:,.0f} total value, showing up to 15):
+{contract_list}
+
+PRIORITY AREAS TO ASSESS (weighted by FY2026 budget growth):
+
+{priority_descriptions}
+
+TASK: For each priority area, score how directly this company's demonstrated capabilities (based on their contracts, agencies served, and NAICS/PSC codes) support that priority.
+
+SCORING GUIDANCE:
+- 0.0: No relevance to this priority
+- 0.1-0.3: Tangential or indirect support (general-purpose tech that could apply)
+- 0.4-0.6: Moderate alignment (some contracts clearly relevant)
+- 0.7-0.8: Strong alignment (multiple contracts directly address this priority)
+- 0.9-1.0: Core focus (company's primary work IS this priority area)
+
+Be conservative - contract data provides less signal than SBIR titles. Only score high if the agency, NAICS/PSC codes, and contract patterns clearly demonstrate direct relevance.
+
+ALSO ASSESS these boolean modifiers:
+- pacific_relevance: Does this company's work explicitly address Indo-Pacific operations, China threat scenarios, A2/AD, long-range Pacific strike, or Taiwan contingencies?
+
+Respond with JSON only:
+{{
+  "scores": {{
+    "space_resilience": <0.0-1.0>,
+    "nuclear_modernization": <0.0-1.0>,
+    "autonomous_systems": <0.0-1.0>,
+    "supply_chain_resilience": <0.0-1.0>,
+    "contested_logistics": <0.0-1.0>,
+    "electronic_warfare": <0.0-1.0>,
+    "jadc2": <0.0-1.0>,
+    "border_homeland": <0.0-1.0>,
+    "cyber_offense_defense": <0.0-1.0>,
+    "hypersonics": <0.0-1.0>
+  }},
+  "modifiers": {{
+    "pacific_relevance": <true/false>
+  }},
+  "top_priorities": ["<top 1-3 priority areas with score >= 0.5>"],
+  "reasoning": "<1-2 sentences on what makes this company strategically relevant>"
+}}"""
+
 
 # =============================================================================
 # DATA CLASSES
@@ -268,6 +319,42 @@ def format_sbir_list(awards: list[dict]) -> str:
         )
     if len(awards) > 15:
         lines.append(f"\n... and {len(awards) - 15} more awards")
+    return "\n".join(lines)
+
+
+def get_contracts(db: Session, entity_id: str) -> list[dict]:
+    """Get all contracts for an entity."""
+    contracts = (
+        db.query(Contract)
+        .filter(Contract.entity_id == entity_id)
+        .order_by(Contract.award_date.desc())
+        .all()
+    )
+    result = []
+    for c in contracts:
+        result.append({
+            "agency": c.contracting_agency or "Unknown",
+            "naics_code": c.naics_code or "N/A",
+            "psc_code": c.psc_code or "N/A",
+            "value": float(c.contract_value) if c.contract_value else 0,
+            "date": str(c.award_date) if c.award_date else "N/A",
+            "procurement_type": c.procurement_type or "standard",
+        })
+    return result
+
+
+def format_contract_list(contracts: list[dict]) -> str:
+    """Format contracts for the policy alignment prompt."""
+    lines = []
+    for i, c in enumerate(contracts[:15], 1):
+        value_str = f"${c['value']:,.0f}" if c['value'] else "N/A"
+        lines.append(
+            f"{i}. Agency: {c['agency']}\n"
+            f"   NAICS: {c['naics_code']} | PSC: {c['psc_code']} | "
+            f"Value: {value_str} | Type: {c['procurement_type']} | Date: {c['date']}"
+        )
+    if len(contracts) > 15:
+        lines.append(f"\n... and {len(contracts) - 15} more contracts")
     return "\n".join(lines)
 
 
@@ -414,25 +501,42 @@ async def score_entity_alignment_async(
         AlignmentResult or None if scoring failed
     """
     awards = entity_data["awards"]
+    contracts = entity_data.get("contracts", [])
     entity_id = entity_data["id"]
     entity_name = entity_data["name"]
+    source = entity_data.get("source", "sbir")
 
-    if not awards:
-        logger.warning(f"No SBIR awards found for {entity_name}")
+    if not awards and not contracts:
+        logger.warning(f"No SBIR awards or contracts found for {entity_name}")
         return None
 
-    # Build prompt
-    sbir_list = format_sbir_list(awards)
+    # Build prompt — use SBIR data if available, otherwise contracts
     priority_descriptions = format_priority_descriptions()
 
-    prompt = ALIGNMENT_PROMPT.format(
-        company_name=entity_name,
-        core_business=entity_data.get("core_business", "unknown"),
-        location=entity_data.get("location", "Unknown"),
-        award_count=len(awards),
-        sbir_list=sbir_list,
-        priority_descriptions=priority_descriptions,
-    )
+    if awards:
+        sbir_list = format_sbir_list(awards)
+        prompt = ALIGNMENT_PROMPT.format(
+            company_name=entity_name,
+            core_business=entity_data.get("core_business", "unknown"),
+            location=entity_data.get("location", "Unknown"),
+            award_count=len(awards),
+            sbir_list=sbir_list,
+            priority_descriptions=priority_descriptions,
+        )
+        evidence_count = len(awards)
+    else:
+        contract_list = format_contract_list(contracts)
+        total_value = sum(c["value"] for c in contracts)
+        prompt = CONTRACT_ALIGNMENT_PROMPT.format(
+            company_name=entity_name,
+            core_business=entity_data.get("core_business", "unknown"),
+            location=entity_data.get("location", "Unknown"),
+            contract_count=len(contracts),
+            total_value=total_value,
+            contract_list=contract_list,
+            priority_descriptions=priority_descriptions,
+        )
+        evidence_count = len(contracts)
 
     try:
         response = await client.messages.create(
@@ -456,15 +560,19 @@ async def score_entity_alignment_async(
         # Calculate composite score
         policy_tailwind = calculate_policy_tailwind(scores)
 
+        reasoning = result.get("reasoning", "")
+        if source == "contracts":
+            reasoning = f"[contract-based scoring] {reasoning}"
+
         return AlignmentResult(
             entity_id=entity_id,
             entity_name=entity_name,
             scores=scores,
             modifiers=modifiers,
             top_priorities=result.get("top_priorities", []),
-            reasoning=result.get("reasoning", ""),
+            reasoning=reasoning,
             policy_tailwind=policy_tailwind,
-            sbir_count=len(awards),
+            sbir_count=evidence_count,
             raw_response=raw_text,
         )
 
@@ -640,18 +748,23 @@ def run_alignment_scoring(
 
 def prefetch_entity_data(db: Session, entities: list[Entity]) -> list[dict]:
     """
-    Pre-fetch all entity data including SBIR awards for async processing.
-    This avoids database access during async operations.
+    Pre-fetch all entity data including SBIR awards (or contracts as fallback)
+    for async processing. This avoids database access during async operations.
     """
     entity_data_list = []
     for entity in entities:
         awards = get_sbir_awards(db, entity.id)
+        contracts = []
+        if not awards:
+            contracts = get_contracts(db, entity.id)
         entity_data_list.append({
             "id": entity.id,
             "name": entity.canonical_name,
             "core_business": entity.core_business.value if entity.core_business else "unknown",
             "location": entity.headquarters_location or "Unknown",
             "awards": awards,
+            "contracts": contracts,
+            "source": "sbir" if awards else "contracts",
         })
     return entity_data_list
 
@@ -712,21 +825,10 @@ async def run_alignment_scoring_async(
             query = query.filter(Entity.policy_alignment.is_(None))
         entities = query.all()
     else:
-        sbir_types = [
-            FundingEventType.SBIR_PHASE_1,
-            FundingEventType.SBIR_PHASE_2,
-            FundingEventType.SBIR_PHASE_3,
-        ]
-        entity_ids_with_sbir = (
-            db.query(FundingEvent.entity_id)
-            .filter(FundingEvent.event_type.in_(sbir_types))
-            .distinct()
-            .subquery()
-        )
+        # Get all classified startups (with SBIRs OR contracts)
         query = (
             db.query(Entity)
             .filter(
-                Entity.id.in_(entity_ids_with_sbir),
                 Entity.merged_into_id.is_(None),
                 Entity.entity_type == EntityType.STARTUP,
                 Entity.core_business.isnot(None),
