@@ -1,6 +1,6 @@
 # Aperture Signals: Project Context
 
-**Last Updated:** March 3, 2026 (evening)
+**Last Updated:** March 5, 2026
 **Purpose:** Spin up a new Claude instance with full context on the Aperture Signals project
 
 ---
@@ -15,37 +15,39 @@ A Python-based defense intelligence platform that aggregates government and priv
 
 ---
 
-## Current Data State (Feb 27, 2026)
+## Current Data State (Mar 5, 2026)
 
 ### Entity Counts by Type
 | Type | Count | Description |
 |------|-------|-------------|
-| STARTUP | 9,328 | Emerging defense tech companies (core tracking population) |
-| PRIME | 864 | Large defense contractors |
-| NON_DEFENSE | 553 | No defense footprint (0 SBIRs, 0 contracts, SEC EDGAR only) |
+| STARTUP | 9,655 | Emerging defense tech companies (core tracking population) |
+| PRIME | 876 | Large defense contractors |
+| NON_DEFENSE | 1,441 | No defense footprint or merged duplicates |
 | RESEARCH | 22 | Universities, FFRDCs, APLs |
-| **Total (unmerged)** | **11,134+** | After entity resolution (834 merges from 11,048+) |
+| **Total (unmerged)** | **~11,994** | After entity resolution (834 merges from 11,048+) |
 
-### Classification Pipeline Status
+### Classification Pipeline Status ✅ COMPLETE
 | Stage | Count | Description |
 |-------|-------|-------------|
-| Fully classified + policy scored | 5,488 | Business classification + policy alignment complete (120 re-scored Feb 24) |
-| Unclassified | 5,623 | ~51% of entities, need business classifier run before policy scoring |
-| Non-defense (excluded) | 553 | No defense footprint (0 SBIRs, 0 contracts, SEC EDGAR only) |
+| Classified + policy scored | 8,798 | Business classification + policy alignment complete (SBIR-based + contract-based) |
+| Classified (no policy score) | 40 | Classified but not yet scored |
+| Unclassified (Reg D only) | 857 | Only Reg D filings, no SBIR/contract data for classification |
+| Non-defense (excluded) | 1,441 | No defense footprint or resolved merges |
 
 ### Data Volumes
 | Table | Records | Value | Notes |
 |-------|---------|-------|-------|
 | Contracts | 13,904 | $1.16T+ | USASpending + 752 OTA contracts from SAM.gov |
-| Funding Events | 32,747+ | - | SBIR + Reg D + VC combined (EDGAR backfill added ~3K) |
-| Signals | 15,753 | - | 15 signal types (active only), tiered freshness decay, refreshed Feb 24 |
+| Funding Events | 32,659+ | - | SBIR + Reg D + VC combined (88 duplicates removed Mar 5) |
+| Signals | 17,297 | - | 15+ signal types (active only), tiered freshness decay, refreshed Mar 5 |
 | Outcome Events | 114 | - | 23 new_contract + 91 funding_raise |
 | SBIR Embeddings | 27,529 | - | 100% coverage, all-MiniLM-L6-v2 |
-| Policy Alignments | 5,488 | - | All eligible entities scored (120 AEROSPACE_PLATFORMS re-scored Feb 24) |
+| Policy Alignments | 8,798 | - | All classified startups scored (SBIR-based + contract-based) |
 | Relationships | 39,712 | - | Knowledge graph (rebuilt Feb 24) |
 | Entity Merges | 834 | - | High-confidence auto-merges |
 | Review Queue | 201,328 | - | Pairs flagged for manual review |
 | Fund Positions | 120 | - | All 3 strategies deployed Q1 2026 (60 signal + 60 benchmark, 58 unique companies) |
+| Composite Scores | 7,137 | - | Entities with freshness-adjusted composite scores |
 
 ---
 
@@ -74,6 +76,10 @@ A Python-based defense intelligence platform that aggregates government and priv
 - Notional fund system (`Fund/fund_manager.py`) — VC-style portfolio construct for thesis validation; strategy definition, cohort deployment with matched-pair benchmarks + bootstrap baselines, milestone tracking, performance reporting; 3 strategies deployed Q1 2026 (Next Wave, Policy Tailwind, Signal Momentum); 120 positions (60 signal + 60 matched benchmark), 58 unique companies (Mar 3)
 - Fund redeployment tool (`Fund/redeploy_fund.py`) — drops existing cohorts for a vintage and provides redeployment instructions; supports `--dry-run`
 - Fund overview PDF generator (`Fund/generate_fund_overview.py`) — branded one-sheeter with strategy summaries, portfolio tables, entry-state differentials, benchmark methodology, and disclaimer; uses reportlab
+- Contract-based business classifier (`processing/business_classifier.py --contracts-only`) — extends classification to entities with contracts but no SBIR awards using NAICS/PSC codes; 3,329 entities classified Mar 5
+- Contract-based policy alignment scoring (`processing/policy_alignment.py`) — scores entities using contract data (agencies, NAICS, PSC) when no SBIR data available; 3,329 entities scored Mar 5
+- Data quality audit (`scripts/audit_data_quality.py`) — comprehensive infrastructure audit covering entity integrity, funding accuracy, signal correctness, policy alignment consistency; 5 sections, returns exit code 0/1 (Mar 5)
+- Employment target identifier (`scripts/employment_targets.py`) — scores startups for employment fit based on composite signals, signal diversity, policy tailwind, momentum recency, KOP alignment, and domain preference multiplier; outputs top 20 profiles + signal heatmap + sector concentration + dark horse list (Mar 5)
 
 ---
 
@@ -110,16 +116,19 @@ A Python-based defense intelligence platform that aggregates government and priv
 ### 1. Business Classifier ✅ COMPLETE
 **File:** `processing/business_classifier.py`
 
-Classifies entities into core business categories based on SBIR award analysis:
-- Uses Claude API (Sonnet) to analyze up to 10 most recent award titles
+Classifies entities into core business categories based on SBIR award or contract analysis:
+- Uses Claude API (Sonnet) to analyze up to 10 most recent SBIR award titles (default) or contract data (--contracts-only)
 - Outputs: classification, confidence score (0-1), reasoning
-- **5,488 entities classified** (full batch completed Feb 10)
+- **8,838 entities classified** (5,488 SBIR-based Feb 10 + 3,329 contract-based Mar 5 + 21 re-classified)
 - Supports async mode: `--async --concurrency 10` (~10x faster)
 - `--skip-classified` flag to avoid re-processing
+- `--contracts-only` flag classifies entities with contracts but no SBIRs using NAICS/PSC codes and agency data
+- Contract-based classifications tagged with `[contract-based classification]` prefix in `core_business_reasoning`
 
 **Usage:**
 ```bash
 python -m processing.business_classifier --all --async --concurrency 10 --skip-classified
+python -m processing.business_classifier --contracts-only --async --concurrency 10 --skip-classified
 python -m processing.business_classifier --names "SHIELD AI" "ANDURIL"
 python -m processing.business_classifier --test --dry-run
 ```
@@ -132,7 +141,10 @@ Scores entities against FY2026 National Defense Strategy priorities:
 - Async concurrency support (`--async --concurrency 10`, ~40 entities/min)
 - `--skip-scored` flag to resume interrupted runs
 - Pacific/Indo-Pacific relevance flagging (boolean tag, not weighted)
-- **5,488 entities scored** (all startups with SBIR events + classified core business; 120 AEROSPACE_PLATFORMS re-scored Feb 24)
+- **8,798 entities scored** (5,488 SBIR-based + 3,329 contract-based Mar 5; 120 AEROSPACE_PLATFORMS re-scored Feb 24)
+- Now scores entities using contract data (agencies, NAICS, PSC codes) as fallback when no SBIR data available
+- Contract-based scoring uses `CONTRACT_ALIGNMENT_PROMPT` and tags reasoning with `[contract-based scoring]` prefix
+- Entity selection no longer requires SBIR data — includes all classified startups
 - Structured examples in prompt for UAS/drone, counter-UAS, satellite, and general software companies with score range guidance
 - `autonomous_systems` description expanded to include UAS/UAV/drones, counter-UAS, Group 1-5 platforms, attritable systems
 
@@ -177,7 +189,7 @@ python -m processing.policy_alignment --names "SHIELD AI" "ANDURIL"
 | sbir_validated_raise | 281 | +2.5 | SLOW_DECAY | Strict temporal: SBIR precedes/catalyzes raise |
 | outsized_award | 102 | +2.0 | SLOW_DECAY | Unusually large contract |
 
-**Total active signals: 15,753** (refreshed Feb 24, 2026 — 1,163 new, 991 updated)
+**Total active signals: 17,297** (refreshed Mar 5, 2026 — expanded to cover newly classified entities; 1,473 stale signals on PRIME/NON_DEFENSE expired during data quality audit)
 
 ### 4. Composite Scoring with Freshness Decay ✅ COMPLETE
 **File:** `scripts/calculate_composite_scores.py`
@@ -271,15 +283,18 @@ python scripts/find_similar.py --embed  # Regenerate embeddings
 
 | Type | Count | Description |
 |------|-------|-------------|
-| STARTUP | 9,328 | Core tracking population |
-| PRIME | 864 | Large defense contractors |
-| NON_DEFENSE | 553 | No defense footprint (0 SBIRs, 0 contracts) |
+| STARTUP | 9,655 | Core tracking population |
+| PRIME | 876 | Large defense contractors |
+| NON_DEFENSE | 1,441 | No defense footprint or merged duplicates |
 | RESEARCH | 22 | Universities, FFRDCs, APLs |
 
 **Reclassification history:**
 - 474 entities reclassified STARTUP -> PRIME (>$50M contracts, excluding AeroVironment, BlueHalo, SpaceX)
+- 7 additional entities reclassified STARTUP -> PRIME (>$100M contracts, Mar 5): SpaceX ($1.46B), AeroVironment ($703M), BlueHalo ($200M), ATI ($523M), NSTXL ($369M), MTEC ($165M), Sheltered Wings ($286M)
 - 8 entities reclassified STARTUP -> RESEARCH (universities/labs)
 - 553 entities reclassified STARTUP -> NON_DEFENSE (SEC EDGAR only, zero defense footprint)
+- 883 merged duplicates (merged_into_id IS NOT NULL) reclassified to NON_DEFENSE (Mar 5)
+- 8 consortium entities flagged with `[CONSORTIUM - second-level resolution needed]` tag in core_business_reasoning (Mar 5)
 
 ### 9. Report Generation ✅ COMPLETE
 **Files:** `scripts/generate_prospect_report.py`, `scripts/generate_pdf_report.py`, `scripts/generate_phase2_pdf.py`
@@ -602,7 +617,17 @@ combined = 0.55 x norm_composite + 0.30 x policy_tailwind + 0.15 x contract_tier
 
 **Rationale:** The 80% prediction rate and 35-month lead time are historical backtests. A notional fund creates dated, documented picks measured against random baselines — the difference between "our backtest looks good" and "here's what we called in real time." The fund also becomes the most compelling sales artifact for client conversations: it demonstrates Aperture trusts its own signals enough to bet on them. Designed with VC constraints (buy-and-hold, no exits) and VC-relevant metrics (milestone hit rates, not IRR) because that matches how the client base actually deploys capital.
 
-### 18. Matched-Pair Benchmarks over Random Benchmarks
+### 18. Contract-Based Classification and Scoring (Mar 5)
+**Decision:** Extended `business_classifier.py` and `policy_alignment.py` to classify/score entities using contract data (NAICS codes, PSC codes, agencies) when no SBIR awards exist.
+
+**Rationale:** 5,021 unclassified entities had zero SBIR awards, making the SBIR-only classifier useless for them. Analysis showed 3,331 had contracts (classifiable via NAICS/PSC), 857 had only Reg D filings (not classifiable), 833 were merged duplicates (safe to ignore). Contract-based classification uses a separate prompt with PSC code ranges (1000-1999 weapons, 5800-5999 comms, 7000-7999 IT) and NAICS codes for domain inference. Results: 3,329/3,329 classified and scored successfully. Dry-run validated (SpaceX → AEROSPACE_PLATFORMS 0.95). Classifications tagged with `[contract-based classification]` and scores tagged with `[contract-based scoring]` for provenance.
+
+### 19. Data Quality Audit Script (Mar 5)
+**Decision:** Created `scripts/audit_data_quality.py` as a persistent, rerunnable infrastructure audit.
+
+**Rationale:** After extending classification to the full universe, needed systematic verification. 5 sections: Entity Integrity (merged duplicates, consortium flags, PRIME misclassification), Funding Accuracy (duplicate events, superseded rows), Signal Correctness (wrong entity types, gone_stale consistency, temporal sequencing), Policy Alignment Consistency, Brief Generation Reliability. Found and fixed 6 failures: 1,473 stale signals on PRIME/NON_DEFENSE, 88 duplicate funding events, 883 un-cleaned merged entities, 26 negative contract values (deobligations). Final state: 0 failures, 5 acceptable warnings. Key check details: consortium detection uses `LIKE '%[CONSORTIUM -%'` (matches the tag, not bare word); NON_DEFENSE contract check excludes merged entities (`AND e.merged_into_id IS NULL`).
+
+### 20. Matched-Pair Benchmarks over Random Benchmarks
 **Decision:** Replaced random benchmark selection with matched-pair nearest-neighbor. For each signal company, the benchmark is the closest match on observable characteristics (SBIR count, contract count, contract value, core business, policy tailwind/signal score) from the same eligible universe, excluding the test variable. Bootstrap baselines (100 random draws) computed at deploy time for confidence intervals.
 
 **Rationale:** Random benchmarks don't control for observable differences — a signal company with 30 SBIRs and $50M in contracts compared to a random company with 2 SBIRs proves nothing about signal quality. Matched-pair isolates the specific dimension being tested (signal strength, policy alignment, or momentum) by holding everything else constant. If the signal cohort still outperforms its matched pair on milestones, the alpha comes from the signal, not from the company's size or maturity. Bootstrap baselines confirm the matched cohort is representative of the broader eligible universe.
@@ -653,6 +678,8 @@ defense-alpha/
 │   ├── generate_phase2_pdf.py       # PDF report generator (Phase II Signal)
 │   ├── generate_analyst_note.py     # One-page analyst note PDF (branded)
 │   ├── generate_darkhive_pdf.py     # Branded client-facing PDF (reusable template)
+│   ├── audit_data_quality.py        # Infrastructure quality audit (5 sections, exit code 0/1)
+│   ├── employment_targets.py        # Employment target identifier (top 20 + heatmap + dark horses)
 │   └── policy_signal_poc.py         # Policy signal-response PoC (Space Force, original)
 ├── Fund/
 │   ├── fund_manager.py         # Notional fund CLI (strategy/deploy/track/performance)
@@ -683,7 +710,8 @@ defense-alpha/
 │   ├── fund_overview_2026_q1.pdf       # Fund one-sheeter (3 strategies, 58 companies)
 │   ├── graph_space_resilience.html     # Interactive ecosystem visualizations
 │   ├── graph_autonomous_systems.html
-│   └── graph_anduril.html
+│   ├── graph_anduril.html
+│   └── employment_targets.md        # Employment target report (top 20 startups for Marine pilot/JTAC)
 ├── config/
 │   ├── policy_priorities.yaml  # NDS priority definitions and weights
 │   └── settings.py             # App configuration
@@ -816,11 +844,11 @@ I'm working on Aperture Signals at ~/projects/defense-alpha
 cd ~/projects/defense-alpha && source venv/bin/activate
 
 Defense intelligence platform with:
-- 11,134+ entities (9,328 startups, 864 primes, 553 non_defense, 22 research)
-- 5,488 fully classified + policy scored
-- 5,623 unclassified (~51%, need business classifier)
-- 13,904 contracts ($1.16T+), 32,747+ funding events
-- 15,753 signals (15 types, tiered freshness decay)
+- ~11,994 entities (9,655 startups, 876 primes, 1,441 non_defense, 22 research)
+- 8,838 classified + 8,798 policy scored (SBIR-based + contract-based)
+- 857 unclassifiable (Reg D only, no SBIR/contract data)
+- 13,904 contracts ($1.16T+), 32,659+ funding events
+- 17,297 signals (15+ types, tiered freshness decay)
 - 114 outcome events (23 contracts, 91 funding raises — 80% prediction rate, 35mo lead)
 - 27,529 SBIR embeddings (full coverage)
 - Key finding: SBIR Phase II predicts private raises — 164 companies, $8.48B, 8-month median gap
@@ -832,6 +860,8 @@ Defense intelligence platform with:
 - Fund CLI: `python Fund/fund_manager.py performance --all`
 - Fund overview PDF: `python Fund/generate_fund_overview.py --vintage 2026-Q1`
 - Deal brief generator: `python scripts/aperture_query.py --type deal --entity "Company Name"`
+- Data quality audit: `python scripts/audit_data_quality.py` (0 failures, 5 warnings as of Mar 5)
+- Employment targets: `python scripts/employment_targets.py` (top 20 startups for employment fit)
 - Reports delivered: Scout Space, Starfish Space, Firestorm Labs, X-Bow (enriched), Darkhive (client-facing + branded PDF), Phase II Signal, RF/Comms v2, investor leads
 - Remaining data gaps: OTA scraper paused at 752 (SAM.gov rate limit), EDGAR captures tranches not full rounds (enrichment compensates per-entity), consortium resolution needed
 
@@ -895,6 +925,7 @@ Aperture Signals → knowledge graph of defense capital formation
 5. Comparables/deal intelligence (Scout Space standalone, now integrated into briefs with Jaccard tag similarity)
 6. Sector intelligence (RF/Comms v2)
 7. Notional fund system — VC-style portfolio construct with signal-selected cohorts vs matched-pair benchmarks + bootstrap baselines; measures milestone hit rate differential as forward-looking thesis validation; 3 strategies deployed Q1 2026 (120 positions, 58 unique companies); branded one-sheeter PDF (`reports/fund_overview_2026_q1.pdf`)
+8. Employment target identifier — personal use tool for identifying high-signal small defense startups for employment; configurable scoring formula with domain preference multiplier for specific MOS/background relevance; top 20 profiles, signal heatmap, sector concentration, dark horse list (`scripts/employment_targets.py`)
 
 **Elevator Pitch:**
 "Aperture maps government defense spending to private capital markets. We track every SBIR award, defense contract, and SEC filing, link them to the same companies, and detect signals that predict where private money is going to flow. Think of it as the intelligence layer between the Pentagon's budget and the investors deploying capital around it."
@@ -921,10 +952,12 @@ One-liner: "Aperture tells defense investors where the government's money is goi
 - 57% of OTA dollars flow through consortia (SOSSEC, ATI, NCMS) — need second-level resolution for actual performers
 - Web enrichment pipeline partially compensates (ingests OTAs found via web search with `procurement_type = 'ota'`), but systematic scraping is needed for coverage
 
-### 4. Classify remaining 5,623 entities (~51% of universe)
-- Business classifier + policy alignment for unclassified entities
-- `python -m processing.business_classifier --all --async --concurrency 10 --skip-classified`
-- Then: `python -m processing.policy_alignment --all --async --concurrency 10 --skip-scored`
+### ~~4. Classify remaining 5,623 entities (~51% of universe)~~ ✅ DONE (Mar 5)
+- Extended classifier with `--contracts-only` mode for 3,329 entities with contracts but no SBIRs
+- Extended policy alignment to score using contract data as fallback when no SBIRs
+- 857 Reg D-only entities remain unclassifiable (no SBIR or contract data)
+- 883 merged duplicates reclassified to NON_DEFENSE
+- Final: 8,838 classified, 8,798 policy scored
 
 ### 5. Entity resolution on OTA data — quantify blind spot
 - How many OTA vendors are already in the entity universe?
@@ -943,9 +976,11 @@ One-liner: "Aperture tells defense investors where the government's money is goi
 
 ### 9. Build feedback capture mechanism for report recipients
 
-### 10. Data validation layer
-- Automated quality checks before/after pipeline
-- Validate: no orphaned contracts, no duplicate source_keys, entity type distribution sanity
+### ~~10. Data validation layer~~ ✅ DONE (Mar 5)
+- `scripts/audit_data_quality.py` — comprehensive 5-section audit (entity integrity, funding accuracy, signal correctness, policy alignment consistency, brief generation reliability)
+- Returns exit code 0 (PASS) or 1 (FAIL) for CI integration
+- Current state: 0 failures, 5 acceptable warnings
+- `python scripts/audit_data_quality.py`
 
 ### 11. Connect RAG → report generator (single command query → PDF)
 - Goal: `python scripts/rag_query.py "counter-drone RF" --pdf reports/counter_drone.pdf`
@@ -1018,6 +1053,16 @@ One-liner: "Aperture tells defense investors where the government's money is goi
 - Auto-approve mode available for high-confidence findings (>90% approval rate threshold)
 - Batch mode supports `priority_entities.txt` file for systematic enrichment before report delivery
 
+### Data Quality Fixes Applied (Mar 5, 2026)
+- **Stale signals on wrong entity types:** Expired 1,473 active signals on PRIME and NON_DEFENSE entities (signals should only be active on STARTUPs)
+- **Duplicate funding events:** Removed 88 duplicate funding events across 77 groups (same entity_id, event_date, amount, event_type)
+- **Merged entity cleanup:** Reclassified 883 merged duplicates (merged_into_id IS NOT NULL) from STARTUP to NON_DEFENSE
+- **Negative contract values:** Zeroed 26 negative contract values (deobligations — government clawbacks, not real contract awards)
+- **PRIME reclassification:** 7 entities with >$100M contracts reclassified STARTUP → PRIME (SpaceX, AeroVironment, BlueHalo, ATI, NSTXL, MTEC, Sheltered Wings)
+- **Consortium flagging:** 8 consortium entities tagged with `[CONSORTIUM - second-level resolution needed]` in core_business_reasoning
+- **Consortium check fix:** Audit check 1c uses `LIKE '%[CONSORTIUM -%'` to match the tag, not the bare word "CONSORTIUM" (which appeared in LLM reasoning for legitimate companies like PROFESSIONAL SOFTWARE CONSORTIUM INC)
+- **NON_DEFENSE contract check:** Audit check 1d2 excludes merged entities (`AND e.merged_into_id IS NULL`) to avoid circular issues with entities that have orphaned contracts from pre-merge state
+
 ### Bug Fixes Applied (Feb 27, 2026)
 - **NULL contract dates:** `ORDER BY CASE WHEN award_date IS NULL THEN 1 ELSE 0 END, award_date` in Government Traction + Lifecycle queries
 - **Lifecycle narrative crash:** Filters to `dated_contracts` before selecting earliest; falls back to count-based narrative
@@ -1075,6 +1120,8 @@ One-liner: "Aperture tells defense investors where the government's money is goi
 | Fund overview PDF | `Fund/generate_fund_overview.py` |
 | Fund table creation | `Fund/create_fund_tables.py` |
 | Fund strategy configs | `Fund/strategies/*.json` |
+| Data quality audit | `scripts/audit_data_quality.py` |
+| Employment target identifier | `scripts/employment_targets.py` |
 
 ---
 

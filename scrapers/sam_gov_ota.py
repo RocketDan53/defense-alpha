@@ -35,18 +35,19 @@ import json
 import logging
 import sys
 import time
-from collections import defaultdict
+from collections import defaultdict, deque
 from dataclasses import dataclass, field
 from datetime import date, datetime
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Optional
 
+import fcntl
+import os
+
 import requests
-from requests.adapters import HTTPAdapter
 from sqlalchemy import func as sa_func
 from sqlalchemy.orm import Session
-from urllib3.util.retry import Retry
 
 # Add project root to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
@@ -74,9 +75,10 @@ logger = logging.getLogger(__name__)
 
 
 # OT award type names as used by SAM.gov / FPDS
+# AGREEMENT first — 18K records, highest priority for backfill
 OT_TYPES = [
-    "OTHER TRANSACTION ORDER",
     "OTHER TRANSACTION AGREEMENT",
+    "OTHER TRANSACTION ORDER",
     "OTHER TRANSACTION IDV",
 ]
 
@@ -135,8 +137,10 @@ class SamGovOTAScraper:
 
     BASE_URL = "https://api.sam.gov/contract-awards/v1/search"
 
-    # SAM.gov rate limits are tight — 5 seconds between requests
-    MIN_REQUEST_INTERVAL = 5.0
+    # Rate limiting: 12s base interval + sliding window (max 10 req/60s)
+    MIN_REQUEST_INTERVAL = 12.0
+    WINDOW_SIZE = 60.0        # sliding window in seconds
+    MAX_REQUESTS_PER_WINDOW = 10
 
     def __init__(
         self,
@@ -147,6 +151,8 @@ class SamGovOTAScraper:
         self.batch_size = batch_size
         self.stats = ScraperStats()
         self.last_request_time = 0.0
+        self._request_timestamps: deque[float] = deque()
+        self._backoff_seconds = 0.0  # exponential 429 backoff (0 = no backoff)
         self.resolver = EntityResolver(db)
 
         # API key
@@ -156,28 +162,89 @@ class SamGovOTAScraper:
                 "SAM_GOV_API_KEY not set. Add it to .env or environment variables."
             )
 
-        # Setup session with retry logic
+        # Plain session — no urllib3 Retry adapter.
+        # The scraper's own retry loop (MAX_RETRIES_PER_PAGE) handles retries
+        # with visible logging. urllib3 Retry retried silently underneath,
+        # causing apparent hangs (3 urllib3 retries × 3 scraper retries × 30s).
         self.session = requests.Session()
-        retry_strategy = Retry(
-            total=3,
-            backoff_factor=1,
-            status_forcelist=[429, 500, 502, 503, 504],
-        )
-        adapter = HTTPAdapter(max_retries=retry_strategy)
-        self.session.mount("https://", adapter)
-        self.session.mount("http://", adapter)
+
+        # PID lockfile — prevent concurrent runs (SQLite can't handle it)
+        self._lockfile_path = LOG_DIR / "sam_gov_ota.lock"
+        self._lockfile = None
+
+    def _acquire_lock(self):
+        """Acquire PID lockfile to prevent concurrent runs."""
+        self._lockfile = open(self._lockfile_path, "w")
+        try:
+            fcntl.flock(self._lockfile, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            self._lockfile.write(str(os.getpid()))
+            self._lockfile.flush()
+            logger.info(f"Acquired lock (PID {os.getpid()})")
+        except OSError:
+            self._lockfile.close()
+            self._lockfile = None
+            raise RuntimeError(
+                "Another SAM.gov OTA scraper is already running. "
+                f"Check {self._lockfile_path} or remove it if stale."
+            )
+
+    def _release_lock(self):
+        """Release PID lockfile."""
+        if self._lockfile:
+            try:
+                fcntl.flock(self._lockfile, fcntl.LOCK_UN)
+                self._lockfile.close()
+                self._lockfile_path.unlink(missing_ok=True)
+                logger.info("Released lock")
+            except Exception:
+                pass
+            self._lockfile = None
 
     def _rate_limit(self):
-        """Enforce rate limiting."""
-        elapsed = time.time() - self.last_request_time
-        if elapsed < self.MIN_REQUEST_INTERVAL:
-            time.sleep(self.MIN_REQUEST_INTERVAL - elapsed)
-        self.last_request_time = time.time()
+        """
+        Enforce rate limiting with three layers:
+        1. Base interval: MIN_REQUEST_INTERVAL (12s) between requests
+        2. Sliding window: max MAX_REQUESTS_PER_WINDOW (10) per WINDOW_SIZE (60s)
+        3. Exponential 429 backoff: applied on top when SAM.gov returns 429
+        """
+        now = time.time()
 
-    # (connect timeout, read timeout) in seconds
-    REQUEST_TIMEOUT = (10, 30)
+        # Layer 1: base interval
+        elapsed = now - self.last_request_time
+        if elapsed < self.MIN_REQUEST_INTERVAL:
+            wait = self.MIN_REQUEST_INTERVAL - elapsed
+            time.sleep(wait)
+            now = time.time()
+
+        # Layer 2: sliding window — purge old timestamps, throttle if at capacity
+        while self._request_timestamps and (now - self._request_timestamps[0]) > self.WINDOW_SIZE:
+            self._request_timestamps.popleft()
+
+        if len(self._request_timestamps) >= self.MAX_REQUESTS_PER_WINDOW:
+            oldest = self._request_timestamps[0]
+            wait = self.WINDOW_SIZE - (now - oldest) + 1.0  # +1s buffer
+            if wait > 0:
+                logger.info(f"Sliding window full ({self.MAX_REQUESTS_PER_WINDOW} req/{self.WINDOW_SIZE:.0f}s), waiting {wait:.1f}s")
+                time.sleep(wait)
+                now = time.time()
+                # Re-purge after sleeping
+                while self._request_timestamps and (now - self._request_timestamps[0]) > self.WINDOW_SIZE:
+                    self._request_timestamps.popleft()
+
+        # Layer 3: exponential 429 backoff (decays on success via _make_request)
+        if self._backoff_seconds > 0:
+            logger.info(f"429 backoff: waiting {self._backoff_seconds:.0f}s before next request")
+            time.sleep(self._backoff_seconds)
+            now = time.time()
+
+        self._request_timestamps.append(now)
+        self.last_request_time = now
+
+    # (connect timeout, read timeout) in seconds — 60s read timeout avoids
+    # premature timeouts on slow SAM.gov responses
+    REQUEST_TIMEOUT = (10, 60)
     MAX_RETRIES_PER_PAGE = 3
-    RETRY_WAIT_SECONDS = 30
+    RETRY_WAIT_SECONDS = 10
 
     def _make_request(self, params: dict) -> Optional[dict]:
         """
@@ -206,11 +273,25 @@ class SamGovOTAScraper:
                 )
 
                 if response.status_code == 429:
-                    logger.warning("Rate limited by SAM.gov. Waiting 60 seconds...")
-                    time.sleep(60)
+                    # Exponential backoff: 60s → 120s → 240s
+                    self._backoff_seconds = max(60.0, self._backoff_seconds * 2) if self._backoff_seconds else 60.0
+                    self._backoff_seconds = min(self._backoff_seconds, 300.0)  # cap at 5 min
+                    logger.warning(
+                        f"Rate limited (429). Backoff escalated to {self._backoff_seconds:.0f}s. "
+                        f"Attempt {attempt}/{self.MAX_RETRIES_PER_PAGE}"
+                    )
+                    time.sleep(self._backoff_seconds)
                     continue
 
                 response.raise_for_status()
+                # Success — decay backoff (halve each success, reset at ≤5s)
+                if self._backoff_seconds > 0:
+                    self._backoff_seconds = self._backoff_seconds / 2
+                    if self._backoff_seconds <= 5:
+                        self._backoff_seconds = 0.0
+                        logger.info("429 backoff fully reset after successful request")
+                    else:
+                        logger.info(f"429 backoff decayed to {self._backoff_seconds:.0f}s")
                 return response.json()
 
             except (requests.exceptions.Timeout, requests.exceptions.ConnectionError) as e:
@@ -495,22 +576,36 @@ class SamGovOTAScraper:
             self.db.rollback()
             return None
 
-    def _get_resume_offset(self, ot_type: str) -> int:
+    def _get_resume_offset(
+        self,
+        ot_type: str,
+        start_date: Optional[date] = None,
+        end_date: Optional[date] = None,
+    ) -> int:
         """
-        Check the DB for contracts of this OT type and estimate the page offset
-        to resume from. Each page is 100 records.
+        Check the DB for contracts of this OT type within the given date range
+        and estimate the page offset to resume from. Each page is 100 records.
+
+        Without date filtering, the old logic counted ALL contracts of this type
+        regardless of the query's date range, producing wrong offsets when
+        re-running with different --start-date values (Bug 3).
         """
-        existing_count = (
-            self.db.query(Contract)
-            .filter(
-                Contract.procurement_type == ProcurementType.OTA.value,
-                Contract.contract_type == ot_type,
-            )
-            .count()
+        query = self.db.query(Contract).filter(
+            Contract.procurement_type == ProcurementType.OTA.value,
+            Contract.contract_type == ot_type,
         )
+        if start_date:
+            query = query.filter(Contract.award_date >= start_date)
+        if end_date:
+            query = query.filter(Contract.award_date <= end_date)
+
+        existing_count = query.count()
         offset = existing_count // 100
         if offset > 0:
-            logger.info(f"Resuming {ot_type}: {existing_count} contracts already in DB, starting at page {offset}")
+            logger.info(
+                f"Resuming {ot_type} ({start_date} to {end_date}): "
+                f"{existing_count} contracts already in DB, starting at page {offset}"
+            )
         return offset
 
     def _scrape_ot_type(
@@ -538,11 +633,14 @@ class SamGovOTAScraper:
         """
         logger.info(f"--- Scraping: {ot_type} ---")
 
-        offset = self._get_resume_offset(ot_type) if resume else 0
+        offset = self._get_resume_offset(ot_type, start_date, end_date) if resume else 0
         page_size = 100
         type_fetched = 0
         pending_commits = 0
         seen_contracts = set()
+        failed_pages = []
+        consecutive_failures = 0
+        MAX_CONSECUTIVE_FAILURES = 3
 
         while True:
             if limit and type_fetched >= limit:
@@ -561,9 +659,23 @@ class SamGovOTAScraper:
             response = self._make_request(params)
 
             if not response:
-                logger.warning(f"Failed to fetch page {offset} for {ot_type}, skipping to next page")
+                failed_pages.append(offset)
+                consecutive_failures += 1
+                logger.warning(
+                    f"Failed page {offset} for {ot_type} "
+                    f"({consecutive_failures} consecutive failures, "
+                    f"{len(failed_pages)} total failed)"
+                )
+                if consecutive_failures >= MAX_CONSECUTIVE_FAILURES:
+                    logger.error(
+                        f"Aborting {ot_type}: {MAX_CONSECUTIVE_FAILURES} consecutive "
+                        f"page failures. Failed pages: {failed_pages}"
+                    )
+                    break
                 offset += 1
                 continue
+
+            consecutive_failures = 0
 
             # Log response structure on first page for debugging
             if offset == 0:
@@ -658,7 +770,13 @@ class SamGovOTAScraper:
                 self.db.rollback()
                 self.stats.errors += 1
 
-        logger.info(f"Completed {ot_type}: {type_fetched} records")
+        if failed_pages:
+            logger.warning(
+                f"Completed {ot_type}: {type_fetched} records, "
+                f"{len(failed_pages)} failed pages: {failed_pages}"
+            )
+        else:
+            logger.info(f"Completed {ot_type}: {type_fetched} records (0 failures)")
         return type_fetched
 
     # ──────────────────────────────────────────────────────────────────
@@ -712,6 +830,9 @@ class SamGovOTAScraper:
         for ot_type in OT_TYPES:
             offset = 0
             pending_commits = 0
+            failed_pages = []
+            consecutive_failures = 0
+            MAX_CONSECUTIVE_FAILURES = 3
 
             while True:
                 params = self._build_params(
@@ -726,9 +847,22 @@ class SamGovOTAScraper:
                 response = self._make_request(params)
 
                 if not response:
-                    logger.warning(f"  Failed to fetch offset={offset}, skipping")
+                    failed_pages.append(offset)
+                    consecutive_failures += 1
+                    logger.warning(
+                        f"  FY{fy} {ot_type} failed page {offset} "
+                        f"({consecutive_failures} consecutive)"
+                    )
+                    if consecutive_failures >= MAX_CONSECUTIVE_FAILURES:
+                        logger.error(
+                            f"  Aborting FY{fy} {ot_type}: {MAX_CONSECUTIVE_FAILURES} "
+                            f"consecutive failures. Failed pages: {failed_pages}"
+                        )
+                        break
                     offset += 1
                     continue
+
+                consecutive_failures = 0
 
                 # Log total on first page
                 if offset == 0:
@@ -829,6 +963,7 @@ class SamGovOTAScraper:
         """
         self.stats = ScraperStats()
         self.stats.start_time = datetime.now()
+        self._acquire_lock()
 
         # Log scraper run
         from processing.models import ScraperRun as _ScraperRun
@@ -923,6 +1058,7 @@ class SamGovOTAScraper:
         except Exception:
             pass
 
+        self._release_lock()
         return self.stats
 
     def scrape(
@@ -955,6 +1091,7 @@ class SamGovOTAScraper:
 
         self.stats = ScraperStats()
         self.stats.start_time = datetime.now()
+        self._acquire_lock()
 
         # Log scraper run start
         from processing.models import ScraperRun as _ScraperRun
@@ -1001,6 +1138,7 @@ class SamGovOTAScraper:
         except Exception:
             pass
 
+        self._release_lock()
         return self.stats
 
 

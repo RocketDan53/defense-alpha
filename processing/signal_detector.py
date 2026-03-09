@@ -61,6 +61,12 @@ SIGNAL_PAE_PORTFOLIO = "pae_portfolio_member"
 SIGNAL_COMMERCIAL_PATHWAY = "commercial_pathway_fit"
 SIGNAL_SBIR_LAPSE_RISK = "sbir_lapse_risk"
 
+# Contract vehicle progression signals
+SIGNAL_SOLE_SOURCE_AWARD = "sole_source_award"
+SIGNAL_OTA_BRIDGE_AWARD = "ota_bridge_award"
+SIGNAL_MULTI_VEHICLE_PRESENCE = "multi_vehicle_presence"
+SIGNAL_CONTRACT_VALUE_STEP_CHANGE = "contract_value_step_change"
+
 # High-priority technology areas for defense
 HIGH_PRIORITY_TECH = {
     "ai_ml", "autonomy", "quantum", "hypersonics", "cyber",
@@ -267,6 +273,11 @@ class SignalDetector:
             "meia_experimentation": self.detect_meia_experimentation(),
             "jar_funding": self.detect_jar_funding(),
             "pae_portfolio": self.detect_pae_portfolio(),
+            # Contract vehicle progression
+            "sole_source_award": self.detect_sole_source_award(),
+            "ota_bridge_award": self.detect_ota_bridge_award(),
+            "multi_vehicle_presence": self.detect_multi_vehicle_presence(),
+            "contract_value_step_change": self.detect_contract_value_step_change(),
         }
 
         self.db.commit()
@@ -2005,6 +2016,351 @@ class SignalDetector:
                 count += 1
 
         return {"sbir_lapse_risk_signals": count}
+
+    # ------------------------------------------------------------------
+    # Contract vehicle progression signals
+    # ------------------------------------------------------------------
+
+    def detect_sole_source_award(self) -> dict:
+        """
+        Detect startups with sole-source (non-competed) contract awards.
+
+        Sole-source indicates the government considers this company the only
+        viable provider — strong defensibility signal that often precedes
+        follow-on production contracts.
+
+        Data availability: Only OTA contracts (SAM.gov) have competition data.
+        Standard contracts (USASpending) lack extent_competed field.
+        Detects via nested JSON: coreData.competitionInformation.extentCompeted.code = 'C'
+        OR coreData.competitionInformation.solicitationProcedures.code = 'SSS'
+        """
+        count = 0
+
+        startups = self.db.query(Entity).filter(
+            Entity.entity_type == EntityType.STARTUP,
+            Entity.merged_into_id.is_(None),
+        ).all()
+
+        startup_ids = {e.id for e in startups}
+        startup_map = {e.id: e for e in startups}
+
+        # Query OTA contracts with raw_data (only source with competition info)
+        ota_contracts = self.db.query(Contract).filter(
+            Contract.entity_id.in_(startup_ids),
+            Contract.procurement_type == "ota",
+            Contract.raw_data.isnot(None),
+        ).all()
+
+        for contract in ota_contracts:
+            raw = contract.raw_data
+            if not isinstance(raw, dict):
+                try:
+                    raw = json.loads(raw) if isinstance(raw, str) else {}
+                except (json.JSONDecodeError, TypeError):
+                    continue
+
+            comp_info = raw.get("coreData", {}).get("competitionInformation", {})
+            extent_code = comp_info.get("extentCompeted", {}).get("code", "")
+            sol_code = comp_info.get("solicitationProcedures", {}).get("code", "")
+            extent_name = comp_info.get("extentCompeted", {}).get("name", "")
+            sol_name = comp_info.get("solicitationProcedures", {}).get("name", "")
+
+            is_sole_source = extent_code == "C" or sol_code == "SSS"
+            if not is_sole_source:
+                continue
+
+            entity = startup_map.get(contract.entity_id)
+            if not entity:
+                continue
+
+            self._create_or_update_signal(
+                entity_id=entity.id,
+                signal_type=SIGNAL_SOLE_SOURCE_AWARD,
+                confidence=Decimal("0.85"),
+                detected_date=contract.award_date or date.today(),
+                evidence={
+                    "contracting_agency": contract.contracting_agency,
+                    "contract_value": float(contract.contract_value or 0),
+                    "award_date": str(contract.award_date) if contract.award_date else None,
+                    "contract_number": contract.contract_number,
+                    "extent_competed": extent_name or extent_code,
+                    "solicitation_procedures": sol_name or sol_code,
+                    "entity_name": entity.canonical_name,
+                },
+            )
+            count += 1
+
+        return {"sole_source_award_signals": count}
+
+    def detect_ota_bridge_award(self) -> dict:
+        """
+        Detect startups that bridged from OTA prototype to standard (FAR) production contract.
+
+        The OTA-to-production transition is the canonical defense startup maturation
+        path. Companies that complete this bridge are acquisition targets and capital
+        events.
+
+        Fires when entity has OTA contract AND a later standard contract.
+        Agency matching at department level (OTA uses office names, standard uses
+        department names — both share sub-tier identifiers).
+        """
+        count = 0
+
+        startups = self.db.query(Entity).filter(
+            Entity.entity_type == EntityType.STARTUP,
+            Entity.merged_into_id.is_(None),
+        ).all()
+
+        startup_ids = {e.id for e in startups}
+        startup_map = {e.id: e for e in startups}
+
+        # Get all contracts for startups, grouped by entity
+        all_contracts = self.db.query(Contract).filter(
+            Contract.entity_id.in_(startup_ids),
+        ).order_by(Contract.award_date).all()
+
+        from collections import defaultdict
+        entity_contracts = defaultdict(list)
+        for c in all_contracts:
+            entity_contracts[c.entity_id].append(c)
+
+        for entity_id, contracts in entity_contracts.items():
+            ota_contracts = [c for c in contracts if c.procurement_type == "ota"]
+            std_contracts = [c for c in contracts if c.procurement_type == "standard"]
+
+            if not ota_contracts or not std_contracts:
+                continue
+
+            # Find earliest OTA and any standard contract that follows it
+            earliest_ota = None
+            for c in ota_contracts:
+                if c.award_date and (earliest_ota is None or c.award_date < earliest_ota.award_date):
+                    earliest_ota = c
+
+            if earliest_ota is None or earliest_ota.award_date is None:
+                # Try with undated OTAs — if entity has both types, still meaningful
+                # but we can't confirm temporal ordering, so skip
+                continue
+
+            # Find first standard contract after the OTA
+            followon = None
+            for c in std_contracts:
+                if c.award_date and c.award_date > earliest_ota.award_date:
+                    if followon is None or c.award_date < followon.award_date:
+                        followon = c
+
+            if followon is None:
+                continue
+
+            gap_days = (followon.award_date - earliest_ota.award_date).days
+            gap_months = round(gap_days / 30.44, 1)
+
+            entity = startup_map.get(entity_id)
+            if not entity:
+                continue
+
+            self._create_or_update_signal(
+                entity_id=entity_id,
+                signal_type=SIGNAL_OTA_BRIDGE_AWARD,
+                confidence=Decimal("0.90"),
+                detected_date=followon.award_date,
+                evidence={
+                    "ota_agency": earliest_ota.contracting_agency,
+                    "ota_value": float(earliest_ota.contract_value or 0),
+                    "ota_date": str(earliest_ota.award_date),
+                    "followon_agency": followon.contracting_agency,
+                    "followon_value": float(followon.contract_value or 0),
+                    "followon_date": str(followon.award_date),
+                    "gap_months": gap_months,
+                    "entity_name": entity.canonical_name,
+                },
+            )
+            count += 1
+
+        return {"ota_bridge_award_signals": count}
+
+    def detect_multi_vehicle_presence(self) -> dict:
+        """
+        Detect startups with contracts across 3+ distinct vehicle types.
+
+        Multi-vehicle presence means government is finding this company through
+        multiple acquisition pathways simultaneously — indicates broad demand.
+
+        Vehicle types classified from available data:
+        - 'ota': procurement_type = 'ota'
+        - 'sbir': has SBIR funding events
+        - 'baa_rd': R&D PSC codes (A-series = R&D/BAA-type)
+        - 'standard_production': standard contracts with non-R&D PSC codes
+        """
+        count = 0
+
+        startups = self.db.query(Entity).filter(
+            Entity.entity_type == EntityType.STARTUP,
+            Entity.merged_into_id.is_(None),
+        ).all()
+
+        startup_ids = {e.id for e in startups}
+        startup_map = {e.id: e for e in startups}
+
+        # Pre-fetch all contracts for startups
+        all_contracts = self.db.query(Contract).filter(
+            Contract.entity_id.in_(startup_ids),
+        ).all()
+
+        from collections import defaultdict
+        entity_contracts = defaultdict(list)
+        for c in all_contracts:
+            entity_contracts[c.entity_id].append(c)
+
+        # Pre-fetch SBIR status per entity
+        sbir_entities = set()
+        sbir_results = self.db.query(FundingEvent.entity_id).filter(
+            FundingEvent.entity_id.in_(startup_ids),
+            FundingEvent.event_type.in_([
+                FundingEventType.SBIR_PHASE_1,
+                FundingEventType.SBIR_PHASE_2,
+                FundingEventType.SBIR_PHASE_3,
+            ]),
+        ).distinct().all()
+        sbir_entities = {r[0] for r in sbir_results}
+
+        for entity_id, contracts in entity_contracts.items():
+            vehicle_types = set()
+            total_value = Decimal(0)
+
+            # Check OTA
+            if any(c.procurement_type == "ota" for c in contracts):
+                vehicle_types.add("ota")
+
+            # Check SBIR
+            if entity_id in sbir_entities:
+                vehicle_types.add("sbir")
+
+            # Check R&D (BAA-type): PSC codes starting with 'A'
+            if any(c.psc_code and c.psc_code.startswith("A") for c in contracts):
+                vehicle_types.add("baa_rd")
+
+            # Check standard production (non-R&D standard contracts)
+            std_non_rd = [
+                c for c in contracts
+                if c.procurement_type == "standard"
+                and not (c.psc_code and c.psc_code.startswith("A"))
+            ]
+            if std_non_rd:
+                vehicle_types.add("standard_production")
+
+            for c in contracts:
+                total_value += c.contract_value or Decimal(0)
+
+            if len(vehicle_types) < 3:
+                continue
+
+            entity = startup_map.get(entity_id)
+            if not entity:
+                continue
+
+            self._create_or_update_signal(
+                entity_id=entity_id,
+                signal_type=SIGNAL_MULTI_VEHICLE_PRESENCE,
+                confidence=Decimal("0.80"),
+                detected_date=date.today(),
+                evidence={
+                    "vehicle_types": sorted(vehicle_types),
+                    "vehicle_count": len(vehicle_types),
+                    "total_contract_value": float(total_value),
+                    "entity_name": entity.canonical_name,
+                },
+            )
+            count += 1
+
+        return {"multi_vehicle_presence_signals": count}
+
+    def detect_contract_value_step_change(self) -> dict:
+        """
+        Detect startups whose most recent contract is 5x+ their median prior contract.
+
+        A step-change in contract size (e.g., $2M -> $15M) indicates the government
+        has moved from R&D to production commitment. Often precedes private capital raise.
+
+        Requires minimum 3 prior contracts to avoid noise. Uses contracts with
+        non-null, positive values.
+        """
+        count = 0
+        min_prior = 3
+        step_threshold = 5.0
+
+        startups = self.db.query(Entity).filter(
+            Entity.entity_type == EntityType.STARTUP,
+            Entity.merged_into_id.is_(None),
+        ).all()
+
+        startup_ids = {e.id for e in startups}
+        startup_map = {e.id: e for e in startups}
+
+        # Pre-fetch contracts with positive values, ordered by date
+        all_contracts = self.db.query(Contract).filter(
+            Contract.entity_id.in_(startup_ids),
+            Contract.contract_value > 0,
+        ).order_by(Contract.award_date).all()
+
+        from collections import defaultdict
+        entity_contracts = defaultdict(list)
+        for c in all_contracts:
+            entity_contracts[c.entity_id].append(c)
+
+        for entity_id, contracts in entity_contracts.items():
+            if len(contracts) < min_prior + 1:
+                continue
+
+            # Latest contract is the last one (ordered by date)
+            # Handle NULL dates: sort with NULLs last
+            dated = [c for c in contracts if c.award_date is not None]
+            if len(dated) < min_prior + 1:
+                continue
+
+            dated.sort(key=lambda c: c.award_date)
+            latest = dated[-1]
+            prior = dated[:-1]
+
+            # Calculate median of prior contracts
+            prior_values = sorted([float(c.contract_value) for c in prior])
+            n = len(prior_values)
+            if n % 2 == 0:
+                median_prior = (prior_values[n // 2 - 1] + prior_values[n // 2]) / 2
+            else:
+                median_prior = prior_values[n // 2]
+
+            if median_prior <= 0:
+                continue
+
+            latest_value = float(latest.contract_value)
+            step_ratio = latest_value / median_prior
+
+            if step_ratio < step_threshold:
+                continue
+
+            entity = startup_map.get(entity_id)
+            if not entity:
+                continue
+
+            self._create_or_update_signal(
+                entity_id=entity_id,
+                signal_type=SIGNAL_CONTRACT_VALUE_STEP_CHANGE,
+                confidence=Decimal("0.75"),
+                detected_date=latest.award_date or date.today(),
+                evidence={
+                    "latest_contract_value": latest_value,
+                    "median_prior_value": round(median_prior, 2),
+                    "step_ratio": round(step_ratio, 2),
+                    "latest_agency": latest.contracting_agency,
+                    "latest_date": str(latest.award_date) if latest.award_date else None,
+                    "prior_contract_count": len(prior),
+                    "entity_name": entity.canonical_name,
+                },
+            )
+            count += 1
+
+        return {"contract_value_step_change_signals": count}
 
 
 def get_signal_summary(db: Session) -> dict:

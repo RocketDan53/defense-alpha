@@ -46,6 +46,11 @@ DETECTOR_MAP = {
     "meia_experimentation": "detect_meia_experimentation",
     "jar_funding": "detect_jar_funding",
     "pae_portfolio": "detect_pae_portfolio",
+    # Contract vehicle progression
+    "sole_source_award": "detect_sole_source_award",
+    "ota_bridge_award": "detect_ota_bridge_award",
+    "multi_vehicle_presence": "detect_multi_vehicle_presence",
+    "contract_value_step_change": "detect_contract_value_step_change",
 }
 
 # Detectors that require a cutoff_date argument

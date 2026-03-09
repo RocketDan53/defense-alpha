@@ -48,6 +48,10 @@ from processing.signal_detector import (
     SIGNAL_COMMERCIAL_PATHWAY,
     SIGNAL_SBIR_LAPSE_RISK,
     SIGNAL_SBIR_VALIDATED_RAISE,
+    SIGNAL_SOLE_SOURCE_AWARD,
+    SIGNAL_OTA_BRIDGE_AWARD,
+    SIGNAL_MULTI_VEHICLE_PRESENCE,
+    SIGNAL_CONTRACT_VALUE_STEP_CHANGE,
 )
 
 # Positive signal weights
@@ -70,6 +74,11 @@ POSITIVE_WEIGHTS = {
     SIGNAL_TIME_TO_CONTRACT: 2.0,
     SIGNAL_FUNDING_VELOCITY: 1.5,
     SIGNAL_COMMERCIAL_PATHWAY: 1.5,  # Positioned for commercial-first pathway
+    # Contract vehicle progression
+    SIGNAL_SOLE_SOURCE_AWARD: 2.0,           # Gov considers sole viable provider
+    SIGNAL_OTA_BRIDGE_AWARD: 2.5,            # OTA prototype → production transition
+    SIGNAL_MULTI_VEHICLE_PRESENCE: 1.5,      # Multiple acquisition pathways
+    SIGNAL_CONTRACT_VALUE_STEP_CHANGE: 2.0,  # Step-change in contract size
 }
 
 # Negative signal weights (subtracted from score)
@@ -118,6 +127,7 @@ SIGNAL_DECAY_PROFILES = {
     SIGNAL_FIRST_DOD_CONTRACT: FAST_DECAY,
     SIGNAL_MEIA_EXPERIMENTATION: FAST_DECAY,
     SIGNAL_SBIR_LAPSE_RISK: FAST_DECAY,
+    SIGNAL_CONTRACT_VALUE_STEP_CHANGE: FAST_DECAY,  # Momentum — stale after 12mo
 
     # Slow decay — milestone signals
     SIGNAL_SBIR_PHASE_2: SLOW_DECAY,
@@ -129,6 +139,8 @@ SIGNAL_DECAY_PROFILES = {
     SIGNAL_OUTSIZED_AWARD: SLOW_DECAY,
     SIGNAL_SBIR_VALIDATED_RAISE: SLOW_DECAY,
     SIGNAL_JAR_FUNDING: SLOW_DECAY,
+    SIGNAL_SOLE_SOURCE_AWARD: SLOW_DECAY,    # Milestone — sole-source is durable
+    SIGNAL_OTA_BRIDGE_AWARD: SLOW_DECAY,     # Milestone — OTA→production bridge
 
     # No decay — structural signals
     SIGNAL_CUSTOMER_CONCENTRATION: NO_DECAY,
@@ -139,6 +151,7 @@ SIGNAL_DECAY_PROFILES = {
     SIGNAL_KOP_ALIGNMENT: NO_DECAY,
     SIGNAL_PAE_PORTFOLIO: NO_DECAY,
     SIGNAL_COMMERCIAL_PATHWAY: NO_DECAY,
+    SIGNAL_MULTI_VEHICLE_PRESENCE: NO_DECAY,  # Structural — multi-vehicle is persistent
 }
 
 # Default profile for unknown signal types
