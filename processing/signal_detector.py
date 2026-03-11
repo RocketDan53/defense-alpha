@@ -67,6 +67,9 @@ SIGNAL_OTA_BRIDGE_AWARD = "ota_bridge_award"
 SIGNAL_MULTI_VEHICLE_PRESENCE = "multi_vehicle_presence"
 SIGNAL_CONTRACT_VALUE_STEP_CHANGE = "contract_value_step_change"
 
+# SBIR reauthorization signals (March 2026)
+SIGNAL_STRATEGIC_BREAKTHROUGH_AWARD = "strategic_breakthrough_award"
+
 # High-priority technology areas for defense
 HIGH_PRIORITY_TECH = {
     "ai_ml", "autonomy", "quantum", "hypersonics", "cyber",
@@ -278,6 +281,8 @@ class SignalDetector:
             "ota_bridge_award": self.detect_ota_bridge_award(),
             "multi_vehicle_presence": self.detect_multi_vehicle_presence(),
             "contract_value_step_change": self.detect_contract_value_step_change(),
+            # SBIR reauthorization (stub — Q4 FY2026)
+            "strategic_breakthrough_award": self.detect_strategic_breakthrough_awards(),
         }
 
         self.db.commit()
@@ -1918,7 +1923,10 @@ class SignalDetector:
 
     def detect_sbir_lapse_risk(self) -> dict:
         """
-        Detect companies at risk from SBIR/STTR authorization lapse.
+        SBIR lapse risk: program lapsed Oct 1 2025, reauthorized March 4 2026 (~5 months).
+        Companies mid-Phase II during lapse face pipeline disruption even post-restart.
+        Agencies need time to process backlog before new awards flow.
+        Signal remains relevant through Q3 2026 for affected companies.
 
         Fires for companies where SBIR is >70% of total government funding
         AND they have no significant private capital (< $1M Reg D).
@@ -2009,8 +2017,11 @@ class SignalDetector:
                         "regd_total": float(regd_total),
                         "sbir_dependency_pct": round(sbir_pct * 100, 1),
                         "total_gov_funding": float(total_gov),
-                        "note": "SBIR/STTR authorization lapsed Oct 1, 2025. Not reauthorized in FY26 NDAA.",
                         "risk_level": risk_level,
+                        "lapse_period_months": 5,
+                        "reauthorization_date": "2026-03-04",
+                        "reauthorization_act": "Small Business Innovation and Economic Security Act",
+                        "pipeline_status": "disrupted_recovering",
                     },
                 )
                 count += 1
@@ -2361,6 +2372,25 @@ class SignalDetector:
             count += 1
 
         return {"contract_value_step_change_signals": count}
+
+    def detect_strategic_breakthrough_awards(self, entity_ids=None):
+        """
+        Detects Strategic Breakthrough Award recipients.
+
+        New program created by Small Business Innovation and Economic Security Act
+        (March 2026). Requires 100% matching funds, 48-month performance period.
+        Companies receiving this award are explicitly venture-capital-ready by design.
+
+        STATUS: STUB — first DoD solicitations expected Q4 FY2026 (July-Sept 2026).
+        Will fire when awards begin appearing in SBIR.gov / USASpending data.
+
+        Detection logic (when live):
+        - SBIR.gov award with program = 'Strategic Breakthrough' or equivalent tag
+        - USASpending contract with SBIR topic referencing Strategic Breakthrough
+        - Confidence: 0.95 (highest in platform — matching capital already committed)
+        """
+        logger.info("strategic_breakthrough_award: STUB — no awards expected until Q4 FY2026")
+        return {"strategic_breakthrough_award_signals": 0}
 
 
 def get_signal_summary(db: Session) -> dict:

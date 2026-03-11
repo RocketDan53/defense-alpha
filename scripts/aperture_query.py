@@ -1323,16 +1323,18 @@ The FY26 NDAA (Dec 2025) codified: portfolio-based acquisition, commercial-first
 ("presumption of commerciality"), expanded nontraditional contractor definition, TINA
 threshold raised to $10M, CAS threshold raised to $100M.
 
-CRITICAL: SBIR/STTR authorizations lapsed Oct 1, 2025 and were NOT reauthorized.
-Companies dependent on SBIR face pipeline disruption.
+SBIR/STTR UPDATE: Program lapsed Oct 1, 2025, reauthorized March 4, 2026 under the
+Small Business Innovation and Economic Security Act (5-year, through 2031). ~5 months
+of pipeline disruption. Agencies are now restarting solicitations but backlog processing
+will take time through Q3 2026. A new "Strategic Breakthrough Awards" program was created
+requiring 100% matching capital — first DoD solicitations expected Q4 FY2026.
 
 When assessing this company, consider:
 1. How does it position under MEIA experimentation (warfighter-first validation)?
 2. Does it benefit from commercial-first pathway?
-3. Is it exposed to SBIR lapse risk?
+3. Was it affected by the SBIR lapse? Is the pipeline recovering for them?
 4. Which KOPs does its technology address?
-5. Are the company's SBIR awards pre-lapse (still valid, work continues) or was the company
-   dependent on future SBIR funding rounds that are now disrupted?
+5. Could it qualify for Strategic Breakthrough Awards (has matching capital + late-stage tech)?
 """
 
 CLIENT_FACING_ANALYST_CONTEXT = """
@@ -1344,7 +1346,23 @@ internal scoring methodology language.
 Current market context: DoD acquisition is shifting to warfighter-driven
 experimentation and commercial-first procurement under 2025-2026 reforms.
 Companies with production-ready solutions and commercial revenue have an
-accelerated path. SBIR/STTR funding pipeline has been disrupted since Oct 2025.
+accelerated path. SBIR/STTR was reauthorized March 4, 2026 after a ~5 month
+lapse. Agencies are restarting solicitations but backlog recovery continues.
+A new Strategic Breakthrough Awards program (100% matching capital required)
+launches with first DoD solicitations in Q4 FY2026.
+"""
+
+SBIR_REAUTH_CONTEXT = """
+SBIR PROGRAM STATUS (as of March 2026):
+The SBIR/STTR program lapsed October 1, 2025 and was reauthorized March 4, 2026
+under the Small Business Innovation and Economic Security Act (5-year, through 2031).
+Companies with active sbir_lapse_risk signals experienced ~5 months of pipeline
+disruption. Agencies are now restarting solicitations but backlog processing will
+take time. A new 'Strategic Breakthrough Awards' program was created requiring
+100% matching capital — first DoD solicitations expected Q4 FY2026.
+When assessing companies with sbir_lapse_risk: acknowledge the disruption, note
+the program is now restored, and flag Strategic Breakthrough as a potential
+next-step vehicle if the company has commercial traction and matching capital access.
 """
 
 
@@ -1399,20 +1417,23 @@ def build_analyst_assessment(
 
     client = Anthropic(api_key=api_key)
 
-    # SBIR lapse status context
+    # SBIR lapse/reauth status context
     lapse_status = ""
+    sbir_reauth_context = ""
     if conn and entity_id:
         status = _sbir_lapse_status(conn, entity_id)
         status_map = {
             "no_sbir": "This company has no SBIR awards on record.",
             "active_pre_lapse": (
-                "This company has recent SBIR awards (2024+). Existing awards are "
-                "pre-lapse — work is funded and continuing. However, no new SBIR "
-                "awards will be issued until reauthorization."
+                "This company has recent SBIR awards (2024+). The SBIR program "
+                "was reauthorized March 4, 2026 after a ~5 month lapse. Existing "
+                "awards continued during the lapse, but new solicitations were "
+                "frozen. Agencies are now restarting but backlog processing continues."
             ),
             "aging_pre_lapse": (
                 "This company's most recent SBIR is from 2021-2023. It may have "
-                "been expecting SBIR renewal funding that is now disrupted by the lapse."
+                "been expecting SBIR renewal funding that was disrupted by the "
+                "Oct 2025 – Mar 2026 lapse. Program is now reauthorized through 2031."
             ),
             "historical": (
                 "This company's SBIR engagement is historical (pre-2021). The lapse "
@@ -1420,6 +1441,22 @@ def build_analyst_assessment(
             ),
         }
         lapse_status = f"\n\nSBIR LAPSE STATUS FOR THIS COMPANY: {status_map.get(status, '')}"
+
+        # Inject full reauth context if entity has active sbir_lapse_risk signal
+        # OR most recent SBIR award is between 2024-01-01 and 2026-03-04
+        has_lapse_signal = conn.execute(
+            "SELECT 1 FROM signals WHERE entity_id = ? AND signal_type = 'sbir_lapse_risk' "
+            "AND status = 'ACTIVE' LIMIT 1",
+            (entity_id,),
+        ).fetchone()
+        has_recent_sbir = conn.execute(
+            "SELECT 1 FROM funding_events WHERE entity_id = ? "
+            "AND event_type LIKE 'SBIR_%' "
+            "AND event_date >= '2024-01-01' AND event_date <= '2026-03-04' LIMIT 1",
+            (entity_id,),
+        ).fetchone()
+        if has_lapse_signal or has_recent_sbir:
+            sbir_reauth_context = SBIR_REAUTH_CONTEXT
 
     report_date = date.today().strftime("%B %d, %Y")
 
@@ -1433,6 +1470,7 @@ def build_analyst_assessment(
             f"Today's date is {report_date}. Frame all temporal references accordingly. "
             "Do not reference past dates as future events.\n\n"
             f"{CLIENT_FACING_ANALYST_CONTEXT}"
+            f"{sbir_reauth_context}"
             f"{lapse_status}"
         )
     else:
@@ -1443,6 +1481,7 @@ def build_analyst_assessment(
             f"Today's date is {report_date}. Frame all temporal references accordingly. "
             "Do not reference past dates as future events.\n\n"
             f"{ACQUISITION_REFORM_CONTEXT}"
+            f"{sbir_reauth_context}"
             f"{lapse_status}"
         )
 

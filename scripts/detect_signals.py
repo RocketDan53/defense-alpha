@@ -51,6 +51,8 @@ DETECTOR_MAP = {
     "ota_bridge_award": "detect_ota_bridge_award",
     "multi_vehicle_presence": "detect_multi_vehicle_presence",
     "contract_value_step_change": "detect_contract_value_step_change",
+    # SBIR reauthorization (stub — Q4 FY2026)
+    "strategic_breakthrough_award": "detect_strategic_breakthrough_awards",
 }
 
 # Detectors that require a cutoff_date argument

@@ -52,6 +52,7 @@ from processing.signal_detector import (
     SIGNAL_OTA_BRIDGE_AWARD,
     SIGNAL_MULTI_VEHICLE_PRESENCE,
     SIGNAL_CONTRACT_VALUE_STEP_CHANGE,
+    SIGNAL_STRATEGIC_BREAKTHROUGH_AWARD,
 )
 
 # Positive signal weights
@@ -79,6 +80,8 @@ POSITIVE_WEIGHTS = {
     SIGNAL_OTA_BRIDGE_AWARD: 2.5,            # OTA prototype → production transition
     SIGNAL_MULTI_VEHICLE_PRESENCE: 1.5,      # Multiple acquisition pathways
     SIGNAL_CONTRACT_VALUE_STEP_CHANGE: 2.0,  # Step-change in contract size
+    # SBIR reauthorization (March 2026)
+    SIGNAL_STRATEGIC_BREAKTHROUGH_AWARD: 3.5,  # Highest — matching capital = venture-ready by design
 }
 
 # Negative signal weights (subtracted from score)
@@ -152,6 +155,7 @@ SIGNAL_DECAY_PROFILES = {
     SIGNAL_PAE_PORTFOLIO: NO_DECAY,
     SIGNAL_COMMERCIAL_PATHWAY: NO_DECAY,
     SIGNAL_MULTI_VEHICLE_PRESENCE: NO_DECAY,  # Structural — multi-vehicle is persistent
+    SIGNAL_STRATEGIC_BREAKTHROUGH_AWARD: SLOW_DECAY,  # Milestone — matching capital committed
 }
 
 # Default profile for unknown signal types

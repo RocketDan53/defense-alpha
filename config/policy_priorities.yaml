@@ -1,5 +1,5 @@
 # Aperture Signals — Policy Priority Configuration v2
-# Updated: February 27, 2026
+# Updated: March 11, 2026
 #
 # CHANGE LOG:
 #   v1 (Feb 2026): 10 budget-derived priority areas with FY26 growth weights
@@ -441,12 +441,45 @@ acquisition_framework:
       impact: "mixed"
       benefits: "Favors open-architecture companies; burdens proprietary-locked primes"
 
-    - provision: "SBIR/STTR authorization lapse (Oct 1, 2025)"
+    - provision: "SBIR/STTR authorization lapse and reauthorization"
       effective: "2025-10-01"
-      impact: "headwind"
+      reauthorized: "2026-03-04"
+      impact: "headwind_recovering"
       benefits: "SBIR pipeline disruption for companies dependent on Phase I/II funding"
       note: >
-        SBIR/STTR authorizations lapsed Oct 1, 2025 and were NOT reauthorized
-        in FY26 NDAA. This is a significant headwind for early-stage companies
-        in the Aperture universe. Monitor for reauthorization in supplemental
-        legislation. Affects 3,221 companies in the Phase II pipeline.
+        SBIR/STTR authorizations lapsed Oct 1, 2025. Reauthorized March 4, 2026
+        under the Small Business Innovation and Economic Security Act (5-year,
+        through Sept 30, 2031). ~5 months of pipeline disruption. Agencies now
+        restarting solicitations but backlog processing will take time through
+        Q3 2026. Affects ~2,378 companies in the Phase II pipeline.
+
+# =============================================================================
+# SBIR Reauthorization Context (March 2026)
+# =============================================================================
+
+sbir_reauthorization_2026:
+  status: "reauthorized"
+  authority: "Small Business Innovation and Economic Security Act"
+  reauthorized_date: "2026-03-04"  # Senate passage
+  expiration: "2031-09-30"
+  lapse_period: "2025-10-01 to 2026-03-04"  # ~5 months
+  key_changes:
+    - "Strategic Breakthrough Awards: new program, 100% matching fund required,
+       48-month performance period, targets late-stage development to market entry"
+    - "Proposal caps: limits on submissions per company per year to reduce SBIR mills"
+    - "Foreign due diligence: strengthened screening, agencies must notify flagged companies"
+    - "Improved data collection: Phase III, direct-to-Phase-II, subcontracting tracking"
+    - "5-year window eliminates recurring 3-year reauthorization crises"
+  strategic_breakthrough_timeline:
+    first_dod_solicitations: "Q4 FY2026 (July-September 2026)"
+    other_agencies: "FY2027"
+    note: "Companies need committed matching capital BEFORE applying"
+
+sbir_lapse_context:
+  affected_companies: 2378  # Phase II companies mid-program during lapse
+  lapse_start: "2025-10-01"
+  lapse_end: "2026-03-04"
+  signal_implication: >
+    sbir_lapse_risk signal remains relevant for pipeline disruption tracking
+    even post-reauthorization. Agencies need time to process backlog before
+    new awards flow. Signal should remain active through Q3 2026.
