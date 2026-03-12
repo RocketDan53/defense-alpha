@@ -21,7 +21,6 @@ from collections import defaultdict
 
 PROJECT_DIR = Path(__file__).parent.parent
 sys.path.insert(0, str(PROJECT_DIR))
-sys.path.insert(0, str(PROJECT_DIR / "scripts"))
 DB_PATH = PROJECT_DIR / "data" / "defense_alpha.db"
 REPORTS_DIR = PROJECT_DIR / "reports"
 
@@ -554,8 +553,16 @@ def generate_markdown(companies, phases, agencies, diversified, diversified_tota
 
 def generate_pdf(md_content, companies, phases, agencies, diversified,
                  diversified_totals, stats, report_date, output_path):
-    """Generate branded PDF version of the report."""
-    from generate_pdf_report import ReportPDF, safe_text, BRAND_R, BRAND_G, BRAND_B
+    """Generate branded dark-themed PDF version of the report."""
+    from reportlab.platypus import (
+        SimpleDocTemplate, Paragraph, Spacer, PageBreak, KeepTogether,
+    )
+    from reporting.aperture_style import (
+        PAGE, paragraph_styles, data_table_style, AperturePageTemplate, safe_text,
+    )
+    from reporting.aperture_flowables import (
+        build_cover_page, branded_table, label_value_para, section_divider,
+    )
 
     sorted_sectors = _build_sector_data(companies, phases, agencies)
 
@@ -568,220 +575,144 @@ def generate_pdf(md_content, companies, phases, agencies, diversified,
     phase2_count = sum(1 for c in companies if phases.get(c["id"], 1) >= 2)
     pct_no_private = round(sum(1 for c in companies if c["regd_total"] == 0) / max(total_exposed, 1) * 100, 0)
 
-    pdf = ReportPDF(report_title="SBIR Pipeline Disruption Report", orientation="P", unit="mm", format="A4")
-    pdf.set_auto_page_break(auto=True, margin=20)
-    pdf.set_margins(12, 15, 12)
+    s = paragraph_styles()
+    doc = SimpleDocTemplate(
+        str(output_path),
+        pagesize=PAGE["size"],
+        topMargin=PAGE["margin_top"],
+        bottomMargin=PAGE["margin_bottom"],
+        leftMargin=PAGE["margin_left"],
+        rightMargin=PAGE["margin_right"],
+    )
+    story = []
+    date_str = report_date.strftime("%B %d, %Y")
 
     # Cover page
-    pdf.add_page()
-    pdf.ln(35)
-    pdf.set_font("Helvetica", "B", 11)
-    pdf.set_text_color(120, 120, 120)
-    pdf.cell(0, 7, "APERTURE SIGNALS INTELLIGENCE", align="C", new_x="LMARGIN", new_y="NEXT")
-
-    pdf.ln(5)
-    pdf.set_font("Helvetica", "B", 24)
-    pdf.set_text_color(BRAND_R, BRAND_G, BRAND_B)
-    pdf.cell(0, 12, "SBIR PIPELINE", align="C", new_x="LMARGIN", new_y="NEXT")
-    pdf.cell(0, 12, "DISRUPTION REPORT", align="C", new_x="LMARGIN", new_y="NEXT")
-
-    pdf.ln(5)
-    pdf.set_font("Helvetica", "", 12)
-    pdf.set_text_color(80, 80, 80)
-    pdf.cell(0, 8, safe_text("Defense Startups Exposed to the SBIR/STTR Authorization Lapse"),
-             align="C", new_x="LMARGIN", new_y="NEXT")
-
-    pdf.ln(10)
-    pdf.set_font("Helvetica", "", 11)
-    pdf.set_text_color(100, 100, 100)
-    pdf.cell(0, 7, report_date.strftime("%B %d, %Y"), align="C", new_x="LMARGIN", new_y="NEXT")
-
-    pdf.ln(20)
-    pdf.set_font("Helvetica", "B", 9)
-    pdf.set_text_color(150, 150, 150)
-    pdf.cell(0, 6, "PROPRIETARY & CONFIDENTIAL", align="C", new_x="LMARGIN", new_y="NEXT")
+    build_cover_page(
+        story,
+        report_type="SBIR Pipeline Disruption Report",
+        title="Defense Startups Exposed to the\nSBIR/STTR Authorization Lapse",
+        date_str=date_str,
+        confidential=True,
+    )
 
     # Executive Summary
-    pdf.add_page()
-    pdf.section_title("Executive Summary")
+    story.append(Paragraph("Executive Summary", s["section_head"]))
     exec_summary = (
         f"On October 1, 2025, SBIR/STTR program authorizations lapsed. The FY2026 NDAA, "
         f"signed December 18, 2025, did not reauthorize the program. As of "
-        f"{report_date.strftime('%B %d, %Y')}, {months_since} months into the lapse, "
+        f"{date_str}, {months_since} months into the lapse, "
         f"Aperture Signals has identified {total_exposed:,} defense technology companies "
         f"with active SBIR pipelines and limited alternative funding. These companies hold "
         f"a combined ${sbir_dollars:,.1f}M in SBIR awards across {len(agency_set)} federal "
         f"agencies. {phase2_count:,} companies have reached Phase II - indicating validated "
         f"technology that was on track for transition to production. {pct_no_private:.0f}% "
-        f"have raised no private capital, making them entirely dependent on government R&D "
+        f"have raised no private capital, making them entirely dependent on government R&amp;D "
         f"funding that is now disrupted."
     )
-    pdf.body_text(exec_summary)
-    pdf.ln(5)
+    story.append(Paragraph(safe_text(exec_summary), s["body"]))
+    story.append(Spacer(1, 10))
 
     # Section 2: Impact by Sector table
-    pdf.section_title("Impact by Sector")
-
-    col_widths = [52, 22, 28, 20, 32, 32]
-    headers = ["Sector", "Companies", "Total SBIR", "Phase II+", "With Private Cap", "Fully Dependent"]
-
-    # Header row
-    pdf.set_font("Helvetica", "B", 8)
-    pdf.set_fill_color(BRAND_R, BRAND_G, BRAND_B)
-    pdf.set_text_color(255, 255, 255)
-    for i, (h, w) in enumerate(zip(headers, col_widths)):
-        pdf.cell(w, 6, safe_text(h), border=1, fill=True, align="C")
-    pdf.ln()
-
-    # Data rows
-    pdf.set_font("Helvetica", "", 8)
-    pdf.set_text_color(40, 40, 40)
-    for idx, (sector_key, sdata) in enumerate(sorted_sectors):
-        if idx % 2 == 0:
-            pdf.set_fill_color(245, 245, 248)
-        else:
-            pdf.set_fill_color(255, 255, 255)
-        fill = True
-        row = [
+    story.append(Paragraph("Impact by Sector", s["section_head"]))
+    sector_rows = []
+    for sector_key, sdata in sorted_sectors:
+        sector_rows.append([
             sdata["name"],
             str(sdata["count"]),
             f"${sdata['sbir_total'] / 1_000_000:.1f}M",
             str(sdata["phase2_plus"]),
             str(sdata["with_private"]),
             str(sdata["fully_dependent"]),
-        ]
-        for val, w in zip(row, col_widths):
-            align = "L" if val == row[0] else "C"
-            pdf.cell(w, 5.5, safe_text(val), border=1, fill=fill, align=align)
-        pdf.ln()
-
-    pdf.ln(5)
+        ])
+    story.append(branded_table(
+        ["Sector", "Companies", "Total SBIR", "Phase II+", "With Private Cap", "Fully Dependent"],
+        sector_rows,
+    ))
+    story.append(Spacer(1, 10))
 
     # Section 3: Sector Deep Dives
-    pdf.section_title("Sector Analysis")
+    story.append(Paragraph("Sector Analysis", s["section_head"]))
 
     for sector_key, sdata in sorted_sectors:
         if sdata["count"] < 5:
             continue
 
-        pdf.check_page_break(60)
-
-        pdf.subsection_title(sdata["name"])
-        pdf.set_font("Helvetica", "B", 9)
-        pdf.set_text_color(60, 60, 60)
-        pdf.cell(0, 5, safe_text(
+        story.append(Paragraph(safe_text(sdata["name"]), s["subsection_head"]))
+        story.append(Paragraph(safe_text(
             f"{sdata['count']} companies  |  ${sdata['sbir_total'] / 1_000_000:.1f}M in SBIR awards  |  "
             f"{sdata['phase2_plus']} at Phase II+"
-        ), new_x="LMARGIN", new_y="NEXT")
-        pdf.ln(2)
+        ), s["body_white"]))
+        story.append(Spacer(1, 4))
 
         context = SECTOR_CONTEXT.get(sector_key, SECTOR_CONTEXT.get("other"))
-        pdf.body_text(context)
-        pdf.ln(1)
+        story.append(Paragraph(safe_text(context), s["body"]))
+        story.append(Spacer(1, 4))
 
         # Company table
-        comp_widths = [48, 24, 14, 40, 28, 22]
-        comp_headers = ["Company", "SBIR ($K)", "Phase", "Agencies", "Private Cap", "Dep."]
-
-        pdf.set_font("Helvetica", "B", 7)
-        pdf.set_fill_color(BRAND_R, BRAND_G, BRAND_B)
-        pdf.set_text_color(255, 255, 255)
-        for h, w in zip(comp_headers, comp_widths):
-            pdf.cell(w, 5, safe_text(h), border=1, fill=True, align="C")
-        pdf.ln()
-
-        pdf.set_font("Helvetica", "", 7)
-        pdf.set_text_color(40, 40, 40)
-
         display_comps = sdata["companies"][:25]
         remaining = len(sdata["companies"]) - 25
 
-        for idx, c in enumerate(display_comps):
-            pdf.check_page_break(6)
-            if idx % 2 == 0:
-                pdf.set_fill_color(248, 248, 250)
-            else:
-                pdf.set_fill_color(255, 255, 255)
-
+        comp_rows = []
+        for c in display_comps:
             agency_str = ", ".join(a[:15] for a in c["agencies"][:2])
             if len(c["agencies"]) > 2:
                 agency_str += f" +{len(c['agencies']) - 2}"
             private = _fmt_dollars(c["regd_total"], "K") if c["regd_total"] > 0 else "None"
-
-            row = [
+            comp_rows.append([
                 c["display_name"][:30],
                 f"${c['sbir_total'] / 1_000:,.0f}K",
                 _phase_label(c["max_phase"]),
                 agency_str[:25],
                 private,
                 f"{c['sbir_dependency_pct']:.0f}%",
-            ]
-            aligns = ["L", "R", "C", "L", "R", "C"]
-            for val, w, al in zip(row, comp_widths, aligns):
-                pdf.cell(w, 5, safe_text(val), border=1, fill=True, align=al)
-            pdf.ln()
+            ])
+
+        story.append(branded_table(
+            ["Company", "SBIR ($K)", "Phase", "Agencies", "Private Cap", "Dep."],
+            comp_rows,
+        ))
 
         if remaining > 0:
-            pdf.set_font("Helvetica", "I", 7)
-            pdf.set_text_color(120, 120, 120)
-            pdf.ln(1)
-            pdf.cell(0, 4, safe_text(
-                f"{remaining} additional companies not shown. "
-                f"Contact Aperture Signals for the complete dataset."
-            ), new_x="LMARGIN", new_y="NEXT")
-            pdf.set_text_color(40, 40, 40)
+            story.append(Paragraph(
+                f"<i>{remaining} additional companies not shown. "
+                f"Contact Aperture Signals for the complete dataset.</i>",
+                s["body"],
+            ))
 
-        pdf.ln(5)
+        story.append(Spacer(1, 8))
 
     # Section 4: Diversified Comparison
-    pdf.check_page_break(80)
-    pdf.section_title("The Diversified Comparison")
-    pdf.body_text(
+    story.append(Paragraph("The Diversified Comparison", s["section_head"]))
+    story.append(Paragraph(safe_text(
         f"For comparison, {diversified_totals['count']:,} companies in the Aperture dataset "
         f"have significant SBIR pipelines ($500K+) but are NOT heavily dependent on SBIR "
         f"funding. These companies raised a combined "
         f"${diversified_totals['total_regd'] / 1_000_000:,.1f}M in private capital and hold "
         f"${diversified_totals['total_contracts'] / 1_000_000:,.1f}M in production contracts, "
         f"demonstrating successful transition from R&D to commercial viability."
-    )
-    pdf.ln(3)
+    ), s["body"]))
+    story.append(Spacer(1, 6))
 
     if diversified:
-        div_widths = [48, 26, 32, 32, 30]
-        div_headers = ["Company", "SBIR ($K)", "Private Capital", "Contracts", "SBIR Dep."]
-
-        pdf.set_font("Helvetica", "B", 8)
-        pdf.set_fill_color(BRAND_R, BRAND_G, BRAND_B)
-        pdf.set_text_color(255, 255, 255)
-        for h, w in zip(div_headers, div_widths):
-            pdf.cell(w, 6, safe_text(h), border=1, fill=True, align="C")
-        pdf.ln()
-
-        pdf.set_font("Helvetica", "", 8)
-        pdf.set_text_color(40, 40, 40)
-        for idx, d in enumerate(diversified):
-            if idx % 2 == 0:
-                pdf.set_fill_color(245, 245, 248)
-            else:
-                pdf.set_fill_color(255, 255, 255)
-            row = [
+        div_rows = []
+        for d in diversified:
+            div_rows.append([
                 d["display_name"][:30],
                 f"${d['sbir_total'] / 1_000:,.0f}K",
                 f"${d['regd_total'] / 1_000_000:.1f}M",
                 f"${d['contract_total'] / 1_000_000:.1f}M",
                 f"{d['sbir_dependency']:.0f}%",
-            ]
-            aligns = ["L", "R", "R", "R", "C"]
-            for val, w, al in zip(row, div_widths, aligns):
-                pdf.cell(w, 5.5, safe_text(val), border=1, fill=True, align=al)
-            pdf.ln()
-
-    pdf.ln(5)
+            ])
+        story.append(branded_table(
+            ["Company", "SBIR ($K)", "Private Capital", "Contracts", "SBIR Dep."],
+            div_rows,
+        ))
+    story.append(Spacer(1, 10))
 
     # Section 5: Methodology
-    pdf.check_page_break(40)
-    pdf.section_title("Methodology")
-    pdf.body_text(
+    story.append(Paragraph("Methodology", s["section_head"]))
+    story.append(Paragraph(safe_text(
         "This report is based on Aperture Signals' cross-reference of SBIR.gov award "
         "data, SEC EDGAR Form D filings, and USASpending.gov contract records. "
         "Companies are flagged as exposed when SBIR awards represent more than 70% "
@@ -790,21 +721,23 @@ def generate_pdf(md_content, companies, phases, agencies, diversified,
         "Private capital data is sourced from SEC Form D filings, which capture "
         "Regulation D exemptions but may undercount total fundraising for companies "
         "that raised capital through other structures."
-    )
-    pdf.ln(3)
+    ), s["body"]))
+    story.append(Spacer(1, 6))
 
     # Section 6: About
-    pdf.section_title("About Aperture Signals")
-    pdf.body_text(
+    story.append(Paragraph("About Aperture Signals", s["section_head"]))
+    story.append(Paragraph(safe_text(
         f"Aperture Signals tracks {stats['total_entities']:,} defense technology companies "
         f"across {stats['total_sbir']:,} SBIR awards, {stats['total_contracts']:,} production "
         f"contracts, and {stats['total_funding']:,} private funding events. For deal "
         f"intelligence briefs, sector reports, and investor lead analysis, contact "
         f"info@aperturesignals.com."
-    )
+    ), s["body"]))
 
-    pdf.output(str(output_path))
-    return pdf.page_no()
+    # Build
+    template = AperturePageTemplate("SBIR Pipeline Disruption", date_str=date_str)
+    doc.build(story, onFirstPage=template, onLaterPages=template)
+    return doc.page
 
 
 # =============================================================================

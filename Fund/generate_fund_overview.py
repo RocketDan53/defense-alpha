@@ -20,17 +20,18 @@ from pathlib import Path
 PROJECT_DIR = Path(__file__).parent.parent
 sys.path.insert(0, str(PROJECT_DIR))
 
-from reportlab.lib import colors
-from reportlab.lib.colors import HexColor
-from reportlab.lib.enums import TA_LEFT, TA_CENTER, TA_RIGHT
-from reportlab.lib.pagesizes import letter
-from reportlab.lib.styles import ParagraphStyle
-from reportlab.lib.units import inch
 from reportlab.platypus import (
     SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle,
     KeepTogether, HRFlowable, PageBreak,
 )
-from reportlab.pdfgen import canvas
+
+from reporting.aperture_style import (
+    DARK_BG, ACCENT, ACCENT_LIGHT, ACCENT_DIM,
+    TEXT_PRIMARY, TEXT_SECONDARY, TEXT_DARK, WHITE,
+    BORDER_SUBTLE, GREEN, AMBER, RED,
+    STRATEGY_COLORS, PAGE,
+    paragraph_styles, data_table_style, AperturePageTemplate,
+)
 
 from sqlalchemy import func
 from processing.database import SessionLocal
@@ -41,130 +42,9 @@ from processing.models import (
 )
 
 
-# ── Aperture Brand Palette ──────────────────────────────────────────────
 
-DARK_BG = HexColor("#0F1923")
-ACCENT = HexColor("#3B82F6")
-ACCENT_LIGHT = HexColor("#60A5FA")
-ACCENT_DIM = HexColor("#1E3A5F")
-TEXT_PRIMARY = HexColor("#F1F5F9")
-TEXT_SECONDARY = HexColor("#94A3B8")
-TEXT_DARK = HexColor("#1E293B")
-WHITE = colors.white
-BORDER_SUBTLE = HexColor("#334155")
-GREEN = HexColor("#059669")
-AMBER = HexColor("#D97706")
-RED = HexColor("#DC2626")
-
-STRATEGY_COLORS = {
-    "Next Wave": HexColor("#8B5CF6"),       # Purple
-    "Policy Tailwind": HexColor("#059669"),  # Green
-    "Signal Momentum": HexColor("#3B82F6"),  # Blue
-}
-
-
-# ── Styles ──────────────────────────────────────────────────────────────
-
-def _styles():
-    return {
-        "title": ParagraphStyle(
-            "Title", fontName="Helvetica-Bold", fontSize=18,
-            textColor=WHITE, leading=22, spaceAfter=2,
-        ),
-        "subtitle": ParagraphStyle(
-            "Subtitle", fontName="Helvetica", fontSize=9,
-            textColor=TEXT_SECONDARY, leading=12, spaceAfter=8,
-        ),
-        "section_head": ParagraphStyle(
-            "SectionHead", fontName="Helvetica-Bold", fontSize=11,
-            textColor=WHITE, leading=14, spaceBefore=10, spaceAfter=4,
-        ),
-        "strategy_name": ParagraphStyle(
-            "StrategyName", fontName="Helvetica-Bold", fontSize=10,
-            textColor=WHITE, leading=13, spaceBefore=6, spaceAfter=2,
-        ),
-        "body": ParagraphStyle(
-            "Body", fontName="Helvetica", fontSize=7.5,
-            textColor=TEXT_SECONDARY, leading=10, spaceAfter=4,
-        ),
-        "body_white": ParagraphStyle(
-            "BodyWhite", fontName="Helvetica", fontSize=7.5,
-            textColor=WHITE, leading=10,
-        ),
-        "metric_label": ParagraphStyle(
-            "MetricLabel", fontName="Helvetica", fontSize=7,
-            textColor=TEXT_SECONDARY, leading=9,
-        ),
-        "metric_value": ParagraphStyle(
-            "MetricValue", fontName="Helvetica-Bold", fontSize=12,
-            textColor=WHITE, leading=14,
-        ),
-        "table_header": ParagraphStyle(
-            "TableHeader", fontName="Helvetica-Bold", fontSize=6.5,
-            textColor=TEXT_SECONDARY, leading=8,
-        ),
-        "table_cell": ParagraphStyle(
-            "TableCell", fontName="Helvetica", fontSize=6.5,
-            textColor=TEXT_PRIMARY, leading=8,
-        ),
-        "table_cell_dim": ParagraphStyle(
-            "TableCellDim", fontName="Helvetica", fontSize=6.5,
-            textColor=TEXT_SECONDARY, leading=8,
-        ),
-        "footer": ParagraphStyle(
-            "Footer", fontName="Helvetica", fontSize=6,
-            textColor=TEXT_SECONDARY, leading=8,
-        ),
-        "disclaimer": ParagraphStyle(
-            "Disclaimer", fontName="Helvetica-Oblique", fontSize=5.5,
-            textColor=TEXT_SECONDARY, leading=7, spaceAfter=0,
-        ),
-    }
-
-
-# ── Page Template ───────────────────────────────────────────────────────
-
-class AperturePageTemplate:
-    """Dark-background page with header and footer."""
-
-    def __init__(self, vintage: str):
-        self.vintage = vintage
-
-    def __call__(self, canvas_obj, doc):
-        canvas_obj.saveState()
-        w, h = letter
-
-        # Full dark background
-        canvas_obj.setFillColor(DARK_BG)
-        canvas_obj.rect(0, 0, w, h, fill=True, stroke=False)
-
-        # Top accent bar
-        canvas_obj.setFillColor(ACCENT)
-        canvas_obj.rect(0, h - 3, w, 3, fill=True, stroke=False)
-
-        # Header line
-        canvas_obj.setStrokeColor(BORDER_SUBTLE)
-        canvas_obj.setLineWidth(0.5)
-        canvas_obj.line(40, h - 48, w - 40, h - 48)
-
-        # Header text
-        canvas_obj.setFont("Helvetica-Bold", 8)
-        canvas_obj.setFillColor(ACCENT_LIGHT)
-        canvas_obj.drawString(40, h - 42, "APERTURE")
-
-        canvas_obj.setFont("Helvetica", 7)
-        canvas_obj.setFillColor(TEXT_SECONDARY)
-        canvas_obj.drawRightString(w - 40, h - 42, f"NOTIONAL FUND  |  {self.vintage}  |  PROPRIETARY & CONFIDENTIAL")
-
-        # Footer
-        canvas_obj.setStrokeColor(BORDER_SUBTLE)
-        canvas_obj.line(40, 32, w - 40, 32)
-        canvas_obj.setFont("Helvetica", 6)
-        canvas_obj.setFillColor(TEXT_SECONDARY)
-        canvas_obj.drawString(40, 22, f"Generated {date.today().isoformat()}  |  aperturesignals.com")
-        canvas_obj.drawRightString(w - 40, 22, f"Page {doc.page}")
-
-        canvas_obj.restoreState()
+# Colors, styles, page template, and table styles are imported from
+# reporting.aperture_style — the canonical Aperture brand module.
 
 
 # ── Data Queries ────────────────────────────────────────────────────────
@@ -301,18 +181,18 @@ def gather_fund_data(db, vintage: str) -> dict:
 
 def build_pdf(fund_data: dict, output_path: str):
     """Build the branded one-sheeter PDF."""
-    s = _styles()
+    s = paragraph_styles()
     vintage = fund_data["vintage"]
 
     doc = SimpleDocTemplate(
         output_path,
-        pagesize=letter,
-        topMargin=58, bottomMargin=42,
-        leftMargin=40, rightMargin=40,
+        pagesize=PAGE["size"],
+        topMargin=PAGE["margin_top"], bottomMargin=PAGE["margin_bottom"],
+        leftMargin=PAGE["margin_left"], rightMargin=PAGE["margin_right"],
     )
 
     story = []
-    page_w = letter[0] - 80  # usable width
+    page_w = PAGE["content_width"]
 
     # ── Title Block ──
     story.append(Spacer(1, 4))
@@ -447,22 +327,7 @@ def build_pdf(fund_data: dict, output_path: str):
 
         ptable = Table(table_data, colWidths=col_widths, repeatRows=1)
 
-        style_cmds = [
-            ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
-            ("TOPPADDING", (0, 0), (-1, -1), 2),
-            ("BOTTOMPADDING", (0, 0), (-1, -1), 2),
-            ("LEFTPADDING", (0, 0), (-1, -1), 3),
-            ("RIGHTPADDING", (0, 0), (-1, -1), 3),
-            ("LINEBELOW", (0, 0), (-1, 0), 0.5, BORDER_SUBTLE),
-            ("LINEBELOW", (0, -1), (-1, -1), 0.5, BORDER_SUBTLE),
-        ]
-
-        # Alternating row backgrounds
-        for i in range(1, len(table_data)):
-            if i % 2 == 0:
-                style_cmds.append(("BACKGROUND", (0, i), (-1, i), HexColor("#141F2C")))
-
-        ptable.setStyle(TableStyle(style_cmds))
+        ptable.setStyle(data_table_style(len(table_data)))
         story.append(ptable)
         story.append(Spacer(1, 4))
 
@@ -508,7 +373,7 @@ def build_pdf(fund_data: dict, output_path: str):
     ))
 
     # Build
-    template = AperturePageTemplate(vintage)
+    template = AperturePageTemplate("NOTIONAL FUND", date_str=vintage)
     doc.build(story, onFirstPage=template, onLaterPages=template)
     print(f"\n  Generated: {output_path}")
 

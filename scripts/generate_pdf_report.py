@@ -14,127 +14,38 @@ Usage (from generate_prospect_report.py):
 """
 
 import re
+import sys
 from datetime import date
 from pathlib import Path
 
-from fpdf import FPDF
+PROJECT_DIR = Path(__file__).parent.parent
+sys.path.insert(0, str(PROJECT_DIR))
+
+from reportlab.lib.enums import TA_CENTER
+from reportlab.lib.styles import ParagraphStyle
+from reportlab.platypus import (
+    SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle,
+    HRFlowable, PageBreak, KeepTogether,
+)
+
+from reporting.aperture_style import (
+    DARK_BG, ACCENT, ACCENT_DIM, TEXT_PRIMARY, TEXT_SECONDARY, WHITE,
+    BORDER_SUBTLE, ROW_ALT, CARD_BG, GREEN, RED, PAGE, FONTS,
+    paragraph_styles, data_table_style, AperturePageTemplate,
+    safe_text, fmt_currency,
+)
+from reporting.aperture_flowables import (
+    build_cover_page, branded_table, signal_bullet_para,
+    label_value_para, section_divider,
+)
 
 REPORT_DATE = date.today().strftime("%B %d, %Y")
-FOOTER_TEXT = f"Aperture Signals  |  Proprietary & Confidential  |  {REPORT_DATE}"
-
-# Dark navy brand color: #1B2A4A
-BRAND_R, BRAND_G, BRAND_B = 27, 42, 74
-
-
-def safe_text(text):
-    """Sanitize text for latin-1 compatible PDF fonts."""
-    if not isinstance(text, str):
-        text = str(text)
-    # Replace common Unicode characters with latin-1 safe equivalents
-    text = text.replace("\u2014", " - ")   # em-dash
-    text = text.replace("\u2013", "-")      # en-dash
-    text = text.replace("\u2018", "'")      # left single quote
-    text = text.replace("\u2019", "'")      # right single quote
-    text = text.replace("\u201c", '"')      # left double quote
-    text = text.replace("\u201d", '"')      # right double quote
-    text = text.replace("\u2026", "...")     # ellipsis
-    try:
-        text.encode("latin-1")
-        return text
-    except UnicodeEncodeError:
-        return text.encode("latin-1", errors="replace").decode("latin-1")
 
 
 def clean_title(title):
     """Strip leading junk characters (?, replacement chars) from SBIR titles."""
     title = re.sub(r'^[?\s\x00-\x1f\ufffd]+', '', title)
     return title.strip()
-
-
-def fmt_currency(v):
-    if v >= 1e9: return f"${v/1e9:.1f}B"
-    if v >= 1e6: return f"${v/1e6:.1f}M"
-    if v >= 1e3: return f"${v/1e3:.0f}K"
-    return f"${v:.0f}"
-
-
-class ReportPDF(FPDF):
-
-    def __init__(self, report_title="Emerging Company Report", **kwargs):
-        super().__init__(**kwargs)
-        self._report_title = report_title
-
-    def header(self):
-        if self.page_no() == 1:
-            return
-        self.set_font("Helvetica", "B", 9)
-        self.set_text_color(BRAND_R, BRAND_G, BRAND_B)
-        self.cell(0, 6, safe_text(f"APERTURE  |  {self._report_title}"),
-                  align="L", new_x="LMARGIN", new_y="NEXT")
-        self.set_draw_color(BRAND_R, BRAND_G, BRAND_B)
-        self.set_line_width(0.4)
-        self.line(10, self.get_y(), 200, self.get_y())
-        self.ln(4)
-
-    def footer(self):
-        self.set_y(-15)
-        self.set_font("Helvetica", "I", 7)
-        self.set_text_color(120, 120, 120)
-        self.cell(0, 10, FOOTER_TEXT, align="C")
-
-    # ── helpers ──
-
-    def section_title(self, text):
-        self.set_font("Helvetica", "B", 14)
-        self.set_text_color(BRAND_R, BRAND_G, BRAND_B)
-        self.cell(0, 10, text, new_x="LMARGIN", new_y="NEXT")
-        self.set_draw_color(BRAND_R, BRAND_G, BRAND_B)
-        self.set_line_width(0.3)
-        self.line(10, self.get_y(), 200, self.get_y())
-        self.ln(4)
-
-    def subsection_title(self, text):
-        self.set_font("Helvetica", "B", 11)
-        self.set_text_color(BRAND_R, BRAND_G, BRAND_B)
-        self.cell(0, 8, text, new_x="LMARGIN", new_y="NEXT")
-        self.ln(1)
-
-    def body_text(self, text):
-        self.set_font("Helvetica", "", 9)
-        self.set_text_color(40, 40, 40)
-        self.multi_cell(0, 4.5, safe_text(text))
-        self.ln(1)
-
-    def label_value(self, label, value, bold_value=False):
-        self.set_font("Helvetica", "B", 9)
-        self.set_text_color(60, 60, 60)
-        lw = self.get_string_width(label + "  ")
-        self.cell(lw, 4.5, label + "  ")
-        self.set_font("Helvetica", "B" if bold_value else "", 9)
-        self.set_text_color(40, 40, 40)
-        self.cell(0, 4.5, safe_text(str(value)), new_x="LMARGIN", new_y="NEXT")
-
-    def bullet(self, text, indent=12):
-        self.set_font("Helvetica", "", 9)
-        self.set_text_color(40, 40, 40)
-        self.set_x(self.l_margin + indent)
-        self.multi_cell(0, 4.5, safe_text("- " + text))
-
-    def signal_bullet(self, text, positive=True):
-        self.set_font("Helvetica", "", 9)
-        if positive:
-            marker = "[+] "
-            self.set_text_color(0, 120, 60)
-        else:
-            marker = "[-] "
-            self.set_text_color(180, 60, 30)
-        self.set_x(self.l_margin + 12)
-        self.multi_cell(0, 4.5, safe_text(marker + text))
-        self.set_text_color(40, 40, 40)
-
-    def check_page_break(self, height=50):
-        if self.get_y() + height > 270:
-            self.add_page()
 
 
 # ── Build PDF ───────────────────────────────────────────────────────────────
@@ -154,65 +65,45 @@ def build_pdf(prospects, title, queries, output_path, analyst_note=None):
         Number of pages
     """
     count = len(prospects)
-    pdf = ReportPDF(report_title=title, orientation="P", unit="mm", format="A4")
-    pdf.set_auto_page_break(auto=True, margin=20)
-    pdf.set_margins(15, 15, 15)
+    s = paragraph_styles()
 
-    # ── PAGE 1: Title page ──────────────────────────────────────────────────
-    pdf.add_page()
+    doc = SimpleDocTemplate(
+        str(output_path),
+        pagesize=PAGE["size"],
+        topMargin=PAGE["margin_top"],
+        bottomMargin=PAGE["margin_bottom"],
+        leftMargin=PAGE["margin_left"],
+        rightMargin=PAGE["margin_right"],
+    )
 
-    pdf.ln(30)
-    pdf.set_font("Helvetica", "B", 28)
-    pdf.set_text_color(BRAND_R, BRAND_G, BRAND_B)
-    pdf.cell(0, 14, "APERTURE", align="C", new_x="LMARGIN", new_y="NEXT")
+    story = []
+    page_w = PAGE["content_width"]
 
-    pdf.set_font("Helvetica", "", 16)
-    pdf.set_text_color(80, 80, 80)
-    # Split long titles across two lines
-    if len(title) > 30:
-        parts = title.rsplit(" ", 1)
-        for part in parts:
-            pdf.cell(0, 10, safe_text(part), align="C", new_x="LMARGIN", new_y="NEXT")
-    else:
-        pdf.cell(0, 10, safe_text(title), align="C", new_x="LMARGIN", new_y="NEXT")
-
-    pdf.ln(5)
-    pdf.set_draw_color(BRAND_R, BRAND_G, BRAND_B)
-    pdf.set_line_width(0.5)
-    pdf.line(60, pdf.get_y(), 150, pdf.get_y())
-    pdf.ln(8)
-
-    pdf.set_font("Helvetica", "", 11)
-    pdf.set_text_color(100, 100, 100)
-    pdf.cell(0, 7, REPORT_DATE, align="C", new_x="LMARGIN", new_y="NEXT")
-    pdf.cell(0, 7, f"{count} Prospects  |  Proprietary & Confidential",
-             align="C", new_x="LMARGIN", new_y="NEXT")
-
-    pdf.ln(15)
-    pdf.set_font("Helvetica", "", 9)
-    pdf.set_text_color(80, 80, 80)
-    sources = [
+    # ── Cover Page ──
+    cover_meta = [
+        f"{count} Prospects  |  Proprietary & Confidential",
+        "",
         "Data Sources:",
-        "5,147 DoD contracts from USASpending.gov (2020-2025)",
-        "1,653 SBIR awards with semantic embeddings",
-        "1,979 SEC Form D filings",
-        "Proprietary composite scoring across 13 signal types",
+        "- 5,147 DoD contracts from USASpending.gov (2020-2025)",
+        "- 1,653 SBIR awards with semantic embeddings",
+        "- 1,979 SEC Form D filings",
+        "- Proprietary composite scoring across 13 signal types",
     ]
-    for i, ln in enumerate(sources):
-        if i == 0:
-            pdf.set_font("Helvetica", "B", 9)
-        else:
-            pdf.set_font("Helvetica", "", 9)
-            ln = "-  " + ln
-        pdf.cell(0, 5, ln, align="C", new_x="LMARGIN", new_y="NEXT")
+    build_cover_page(
+        story,
+        report_type="Emerging Company Report",
+        title=title,
+        date_str=REPORT_DATE,
+        meta_lines=cover_meta,
+        confidential=False,  # already in meta_lines
+    )
 
-    # ── PAGE 2: Executive Summary ───────────────────────────────────────────
-    pdf.add_page()
-    pdf.section_title("Executive Summary")
+    # ── Executive Summary ──
+    story.append(Paragraph("Executive Summary", s["section_head"]))
 
     n_queries = len(queries)
     query_word = "query" if n_queries == 1 else "queries"
-    pdf.body_text(
+    story.append(Paragraph(safe_text(
         f"This report identifies the {count} most promising emerging companies in the "
         "target technology sector of the U.S. defense industrial base. "
         f"Companies were surfaced through semantic search over {n_queries} technology "
@@ -220,218 +111,211 @@ def build_pdf(prospects, title, queries, output_path, analyst_note=None):
         "filtered and ranked using Aperture Signals' composite scoring system, which "
         "weighs 13 intelligence signal types including SBIR phase progression, contract wins, "
         "private capital raises, multi-agency interest, and risk indicators."
-    )
-    pdf.ln(2)
+    ), s["body"]))
+    story.append(Spacer(1, 6))
 
     # ── Scoring Methodology Box ──
-    box_y = pdf.get_y()
-    usable_w = pdf.w - pdf.l_margin - pdf.r_margin
-
-    pdf.set_x(pdf.l_margin + 4)
-    pdf.set_font("Helvetica", "B", 9)
-    pdf.set_text_color(BRAND_R, BRAND_G, BRAND_B)
-    pdf.cell(0, 5.5, "Scoring Methodology", new_x="LMARGIN", new_y="NEXT")
-    pdf.ln(0.5)
-
-    methodology_items = [
+    meth_items = [
         ("Composite Score:", "Weighted sum of 13 signals (SBIR advancement, contract wins, "
          "VC raises, agency breadth, risk factors). Higher = stronger momentum."),
-        ("Relevance Score:", "Semantic similarity between company R&D portfolio and target "
+        ("Relevance Score:", "Semantic similarity between company R&amp;D portfolio and target "
          "technology (0-1 scale)."),
         ("Final Rank:", "65% relevance + 35% normalized composite score."),
     ]
-    for label, desc in methodology_items:
-        pdf.set_x(pdf.l_margin + 4)
-        pdf.set_font("Helvetica", "B", 8.5)
-        pdf.set_text_color(40, 40, 40)
-        lw = pdf.get_string_width(label + " ")
-        pdf.cell(lw, 4.5, label + " ")
-        pdf.set_font("Helvetica", "", 8.5)
-        pdf.multi_cell(0, 4.5, desc)
-        pdf.ln(0.5)
-
-    box_end_y = pdf.get_y() + 1
-
-    # Draw border around methodology box
-    pdf.set_draw_color(BRAND_R, BRAND_G, BRAND_B)
-    pdf.set_line_width(0.3)
-    pdf.rect(pdf.l_margin, box_y - 1, usable_w, box_end_y - box_y + 2, style="D")
-
-    pdf.set_y(box_end_y + 4)
+    meth_paras = [Paragraph("<b>Scoring Methodology</b>", s["subsection_head"])]
+    for label, desc in meth_items:
+        meth_paras.append(Paragraph(
+            f"<b>{safe_text(label)}</b> {safe_text(desc)}", s["body"],
+        ))
+    # Wrap in a card-bg table for visual distinction
+    meth_cell = [meth_paras]
+    meth_table = Table([[meth_paras]], colWidths=[page_w - 8])
+    meth_table.setStyle(TableStyle([
+        ("BACKGROUND", (0, 0), (-1, -1), CARD_BG),
+        ("TOPPADDING", (0, 0), (-1, -1), 6),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 6),
+        ("LEFTPADDING", (0, 0), (-1, -1), 8),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 8),
+        ("ROUNDEDCORNERS", [4, 4, 4, 4]),
+    ]))
+    story.append(meth_table)
+    story.append(Spacer(1, 8))
 
     # ── Top N Recommended Prospects ──
     top_count = min(5, count)
-    pdf.subsection_title(f"Top {top_count} Recommended Prospects")
-    pdf.ln(1)
+    story.append(Paragraph(
+        f"Top {top_count} Recommended Prospects", s["subsection_head"],
+    ))
+    story.append(Spacer(1, 2))
 
     for i, p in enumerate(prospects[:top_count]):
-        pdf.set_font("Helvetica", "B", 10)
-        pdf.set_text_color(BRAND_R, BRAND_G, BRAND_B)
-        pdf.cell(8, 5.5, f"{i+1}.")
-        pdf.cell(0, 5.5, safe_text(p["name"]), new_x="LMARGIN", new_y="NEXT")
-
-        pdf.set_font("Helvetica", "", 9)
-        pdf.set_text_color(60, 60, 60)
+        lines = []
         act = p["activity"]
-        meta = (f"    {act['stage']}  |  Composite: {p['composite']:.2f}  |  "
+        lines.append(Paragraph(
+            f"<b>{i+1}. {safe_text(p['name'])}</b>", s["body_white"],
+        ))
+        meta = (f"{act['stage']}  |  Composite: {p['composite']:.2f}  |  "
                 f"Relevance: {p['sim_score']:.3f}")
-        pdf.cell(0, 4.5, safe_text(meta), new_x="LMARGIN", new_y="NEXT")
+        lines.append(Paragraph(safe_text(meta), s["body"]))
 
         if p.get("website_url"):
-            pdf.set_font("Helvetica", "", 8)
-            pdf.set_text_color(100, 100, 100)
-            pdf.cell(8, 4, "")
-            pdf.cell(0, 4, safe_text(p["website_url"]), new_x="LMARGIN", new_y="NEXT")
+            lines.append(Paragraph(safe_text(p["website_url"]), s["body"]))
 
-        # Dynamic rationale from top signals and lead title
-        top_sigs = [s["name"] for s in p["positive_signals"][:3]]
+        # Dynamic rationale
+        top_sigs = [sg["name"] for sg in p["positive_signals"][:3]]
         titles = p.get("titles", [])
         lead_title = ""
         if titles:
             t = titles[0]
             lead_title = clean_title(t[1] if isinstance(t, tuple) else t)
 
-        pdf.set_font("Helvetica", "I", 8.5)
-        pdf.set_text_color(80, 80, 80)
-        pdf.cell(8, 4.5, "")
         rationale_parts = []
         if lead_title:
             rationale_parts.append(lead_title)
         if top_sigs:
             rationale_parts.append("Signals: " + ", ".join(top_sigs))
-        pdf.multi_cell(0, 4.5, safe_text(" | ".join(rationale_parts)))
-        pdf.ln(3)
+        if rationale_parts:
+            lines.append(Paragraph(
+                f"<i>{safe_text(' | '.join(rationale_parts))}</i>", s["body"],
+            ))
+        lines.append(Spacer(1, 6))
+        story.append(KeepTogether(lines))
 
-    # ── Analyst's Note ────────────────────────────────────────────────────
+    # ── Analyst's Note ──
     if analyst_note:
-        # Estimate height: title + paragraphs at ~4.5mm/line, ~90 chars/line
-        est_lines = sum(len(p) // 90 + 1 for p in analyst_note)
-        est_h = 12 + est_lines * 4.5 + len(analyst_note) * 2
-        pdf.check_page_break(est_h)
-        pdf.ln(2)
-        pdf.subsection_title("Analyst's Note")
-        pdf.ln(0.5)
+        story.append(Spacer(1, 4))
+        story.append(Paragraph("Analyst's Note", s["subsection_head"]))
         for para in analyst_note:
-            pdf.body_text(para)
-            pdf.ln(0.5)
+            story.append(Paragraph(safe_text(para), s["body"]))
+            story.append(Spacer(1, 2))
 
-    # ── PAGE 3+: Ranked Summary Table ───────────────────────────────────────
-    pdf.add_page()
-    pdf.section_title("Ranked Prospect List")
+    # ── Ranked Summary Table ──
+    story.append(PageBreak())
+    story.append(Paragraph("Ranked Prospect List", s["section_head"]))
 
-    # Table header — widths sum to 180mm (usable width with 15mm margins)
-    col_w = [8, 62, 26, 18, 18, 28, 20]
     headers = ["#", "Company", "Stage", "Score", "Relev.", "Key Signal", "Latest"]
+    col_widths = [20, 160, 65, 50, 50, 90, 55]
+    # Scale to fit
+    total = sum(col_widths)
+    scale = page_w / total
+    col_widths = [w * scale for w in col_widths]
 
-    pdf.set_font("Helvetica", "B", 8)
-    pdf.set_fill_color(BRAND_R, BRAND_G, BRAND_B)
-    pdf.set_text_color(255, 255, 255)
-    for j, h in enumerate(headers):
-        pdf.cell(col_w[j], 6, h, border=1, fill=True, align="C")
-    pdf.ln()
-
-    pdf.set_text_color(40, 40, 40)
+    table_data = [[Paragraph(h, s["table_header"]) for h in headers]]
     for i, p in enumerate(prospects):
-        pdf.set_font("Helvetica", "", 7.5)
-        if i % 2 == 0:
-            pdf.set_fill_color(240, 245, 250)
-        else:
-            pdf.set_fill_color(255, 255, 255)
         top_sig = p["positive_signals"][0]["name"] if p["positive_signals"] else "-"
         latest = str(p["activity"]["latest_activity"]) if p["activity"]["latest_activity"] else "N/A"
-        # Fit company name to column width (~36 chars at 7.5pt in 62mm)
-        name = p["name"][:36]
+        name_str = p["name"][:36]
+        row = [
+            Paragraph(str(i + 1), s["table_cell_dim"]),
+            Paragraph(safe_text(name_str), s["table_cell"]),
+            Paragraph(safe_text(p["activity"]["stage"]), s["table_cell_dim"]),
+            Paragraph(f"{p['composite']:.2f}", s["table_cell"]),
+            Paragraph(f"{p['sim_score']:.3f}", s["table_cell"]),
+            Paragraph(safe_text(top_sig), s["table_cell_dim"]),
+            Paragraph(safe_text(latest), s["table_cell_dim"]),
+        ]
+        table_data.append(row)
 
-        row = [str(i+1), name, p["activity"]["stage"],
-               f"{p['composite']:.2f}", f"{p['sim_score']:.3f}", top_sig, latest]
-        for j, val in enumerate(row):
-            align = "C" if j in (0, 3, 4, 6) else "L"
-            pdf.cell(col_w[j], 5.5, safe_text(val), border=1, fill=True, align=align)
-        pdf.ln()
+    ranked_table = Table(table_data, colWidths=col_widths, repeatRows=1)
+    ranked_table.setStyle(data_table_style(len(table_data)))
+    story.append(ranked_table)
 
-    # ── Detailed Profiles ───────────────────────────────────────────────────
-    pdf.add_page()
-    pdf.section_title("Detailed Prospect Profiles")
+    # ── Detailed Profiles ──
+    story.append(PageBreak())
+    story.append(Paragraph("Detailed Prospect Profiles", s["section_head"]))
 
     for i, p in enumerate(prospects):
-        pdf.check_page_break(65)
-
-        # Company header — full name, no truncation
-        pdf.set_font("Helvetica", "B", 11)
-        pdf.set_text_color(BRAND_R, BRAND_G, BRAND_B)
-        pdf.cell(0, 7, safe_text(f"{i+1}. {p['name']}"), new_x="LMARGIN", new_y="NEXT")
-
-        # Location, website, stage
         act = p["activity"]
-        if p.get("location"):
-            pdf.label_value("Location:", p["location"])
-        if p.get("website_url"):
-            pdf.label_value("Website:", p["website_url"])
-        pdf.label_value("Stage:", act["stage"])
-        pdf.label_value("Composite Score:",
-                        f"{p['composite']:.2f}  (+{p['positive']:.1f} / {p['negative']:.1f})")
-        pdf.label_value("Technology Relevance:", f"{p['sim_score']:.3f}")
-        pdf.ln(2)
+        profile = []
 
-        # Technology focus — full titles, no truncation (multi_cell wraps)
-        pdf.set_font("Helvetica", "B", 9)
-        pdf.set_text_color(60, 60, 60)
-        pdf.cell(0, 4.5, "Technology Focus:", new_x="LMARGIN", new_y="NEXT")
-        titles = p.get("titles", [])
-        for t in titles[:3]:
+        # Company header
+        profile.append(Paragraph(
+            f"<b>{i+1}. {safe_text(p['name'])}</b>", s["strategy_name"],
+        ))
+
+        # Metadata
+        if p.get("location"):
+            profile.append(label_value_para("Location:", p["location"], s))
+        if p.get("website_url"):
+            profile.append(label_value_para("Website:", p["website_url"], s))
+        profile.append(label_value_para("Stage:", act["stage"], s))
+        profile.append(label_value_para(
+            "Composite Score:",
+            f"{p['composite']:.2f}  (+{p['positive']:.1f} / {p['negative']:.1f})",
+            s,
+        ))
+        profile.append(label_value_para(
+            "Technology Relevance:", f"{p['sim_score']:.3f}", s,
+        ))
+        profile.append(Spacer(1, 4))
+
+        # Technology focus
+        profile.append(Paragraph("<b>Technology Focus:</b>", s["label_value"]))
+        for t in p.get("titles", [])[:3]:
             title_text = clean_title(t[1] if isinstance(t, tuple) else t)
-            pdf.bullet(title_text)
-        pdf.ln(1)
+            profile.append(Paragraph(
+                f"\u2022 {safe_text(title_text)}", s["bullet"],
+            ))
+        profile.append(Spacer(1, 2))
 
         # Signals
-        pdf.set_font("Helvetica", "B", 9)
-        pdf.set_text_color(60, 60, 60)
-        pdf.cell(0, 4.5, "Intelligence Signals:", new_x="LMARGIN", new_y="NEXT")
+        profile.append(Paragraph("<b>Intelligence Signals:</b>", s["label_value"]))
         for sig in p["positive_signals"]:
-            pdf.signal_bullet(f"{sig['name']} ({sig['score']:+.2f})", positive=True)
+            profile.append(signal_bullet_para(
+                f"{sig['name']} ({sig['score']:+.2f})", positive=True, styles=s,
+            ))
         for sig in p["negative_signals"]:
-            pdf.signal_bullet(f"{sig['name']} ({sig['score']:+.2f})", positive=False)
-        pdf.ln(1)
+            profile.append(signal_bullet_para(
+                f"{sig['name']} ({sig['score']:+.2f})", positive=False, styles=s,
+            ))
+        profile.append(Spacer(1, 2))
 
         # Financials
-        pdf.set_font("Helvetica", "B", 9)
-        pdf.set_text_color(60, 60, 60)
-        pdf.cell(0, 4.5, "Financial Summary:", new_x="LMARGIN", new_y="NEXT")
+        profile.append(Paragraph("<b>Financial Summary:</b>", s["label_value"]))
         if act["sbir_count"]:
-            pdf.bullet(f"{act['sbir_count']} SBIR awards ({fmt_currency(act['total_sbir'])})")
+            profile.append(Paragraph(
+                f"\u2022 {act['sbir_count']} SBIR awards ({fmt_currency(act['total_sbir'])})",
+                s["bullet"],
+            ))
         if act["contract_count"]:
-            pdf.bullet(f"{act['contract_count']} contracts ({fmt_currency(act['total_contract'])})")
+            profile.append(Paragraph(
+                f"\u2022 {act['contract_count']} contracts ({fmt_currency(act['total_contract'])})",
+                s["bullet"],
+            ))
         if act["total_regd"] > 0:
-            pdf.bullet(f"Private capital: {fmt_currency(act['total_regd'])}")
-        pdf.ln(1)
+            profile.append(Paragraph(
+                f"\u2022 Private capital: {fmt_currency(act['total_regd'])}",
+                s["bullet"],
+            ))
+        profile.append(Spacer(1, 2))
 
         # Activity
-        pdf.set_font("Helvetica", "B", 9)
-        pdf.set_text_color(60, 60, 60)
-        pdf.cell(0, 4.5, "Recent Activity:", new_x="LMARGIN", new_y="NEXT")
+        profile.append(Paragraph("<b>Recent Activity:</b>", s["label_value"]))
         if act["latest_sbir"]:
-            pdf.bullet(f"Latest SBIR: {act['latest_sbir']}")
+            profile.append(Paragraph(
+                f"\u2022 Latest SBIR: {safe_text(str(act['latest_sbir']))}", s["bullet"],
+            ))
         if act["latest_contract"]:
-            pdf.bullet(f"Latest contract: {act['latest_contract']}")
+            profile.append(Paragraph(
+                f"\u2022 Latest contract: {safe_text(str(act['latest_contract']))}", s["bullet"],
+            ))
         if act["latest_regd"]:
-            pdf.bullet(f"Latest Reg D filing: {act['latest_regd']}")
+            profile.append(Paragraph(
+                f"\u2022 Latest Reg D filing: {safe_text(str(act['latest_regd']))}", s["bullet"],
+            ))
 
-        # Divider
-        pdf.ln(3)
-        pdf.set_draw_color(200, 200, 200)
-        pdf.set_line_width(0.2)
-        pdf.line(15, pdf.get_y(), 195, pdf.get_y())
-        pdf.ln(4)
+        profile.append(section_divider())
+        story.append(KeepTogether(profile))
 
-    # ── Final page: Methodology ─────────────────────────────────────────────
-    pdf.add_page()
-    pdf.section_title("Methodology")
+    # ── Methodology ──
+    story.append(PageBreak())
+    story.append(Paragraph("Methodology", s["section_head"]))
 
-    pdf.body_text(
+    story.append(Paragraph(safe_text(
         "This report was generated by the Aperture Signals Intelligence Engine using the "
         "following pipeline:"
-    )
-    pdf.ln(1)
+    ), s["body"]))
+    story.append(Spacer(1, 4))
 
     steps = [
         ("Semantic Search:", "SBIR award titles embedded with all-MiniLM-L6-v2 "
@@ -445,45 +329,32 @@ def build_pdf(prospects, title, queries, output_path, analyst_note=None):
          "signal, minimum 0.40 relevance score, excluding major defense primes."),
     ]
     for label, desc in steps:
-        pdf.set_font("Helvetica", "B", 9)
-        pdf.set_text_color(60, 60, 60)
-        lw = pdf.get_string_width(label + " ")
-        pdf.cell(lw, 4.5, label + " ")
-        pdf.set_font("Helvetica", "", 9)
-        pdf.set_text_color(40, 40, 40)
-        pdf.multi_cell(0, 4.5, desc)
-        pdf.ln(2)
+        story.append(label_value_para(label, desc, s))
+        story.append(Spacer(1, 4))
 
-    pdf.ln(3)
-    pdf.set_font("Helvetica", "B", 9)
-    pdf.set_text_color(60, 60, 60)
-    pdf.cell(0, 5, "Search Queries:", new_x="LMARGIN", new_y="NEXT")
+    story.append(Spacer(1, 6))
+    story.append(Paragraph("<b>Search Queries:</b>", s["label_value"]))
     for q in queries:
-        pdf.bullet(f'"{q}"')
-    pdf.ln(4)
+        story.append(Paragraph(f'\u2022 "{safe_text(q)}"', s["bullet"]))
+    story.append(Spacer(1, 8))
 
-    pdf.set_draw_color(BRAND_R, BRAND_G, BRAND_B)
-    pdf.set_line_width(0.3)
-    pdf.line(15, pdf.get_y(), 195, pdf.get_y())
-    pdf.ln(4)
+    story.append(section_divider())
 
-    pdf.set_font("Helvetica", "B", 9)
-    pdf.set_text_color(60, 60, 60)
-    pdf.cell(0, 5, "Data Sources:", new_x="LMARGIN", new_y="NEXT")
-    data_sources = [
+    story.append(Paragraph("<b>Data Sources:</b>", s["label_value"]))
+    for src in [
         "5,147 DoD contracts from USASpending.gov (2020-2025)",
         "1,653 SBIR awards with semantic embeddings",
         "1,979 SEC Form D filings",
         "Proprietary composite scoring across 13 signal types",
-    ]
-    for s in data_sources:
-        pdf.bullet(s)
-    pdf.ln(4)
+    ]:
+        story.append(Paragraph(f"\u2022 {safe_text(src)}", s["bullet"]))
+    story.append(Spacer(1, 8))
 
-    pdf.set_font("Helvetica", "", 8)
-    pdf.cell(0, 5, f"Aperture Signals Intelligence Engine v1.0  |  {REPORT_DATE}",
-             new_x="LMARGIN", new_y="NEXT")
+    story.append(Paragraph(safe_text(
+        f"Aperture Signals Intelligence Engine v1.0  |  {REPORT_DATE}"
+    ), s["body"]))
 
-    # ── Write ───────────────────────────────────────────────────────────────
-    pdf.output(str(output_path))
-    return pdf.pages_count
+    # ── Build ──
+    template = AperturePageTemplate("Emerging Company Report", date_str=REPORT_DATE)
+    doc.build(story, onFirstPage=template, onLaterPages=template)
+    return doc.page

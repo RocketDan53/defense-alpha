@@ -36,3 +36,4 @@ logs/
 *.log
 data/*.bak*
 data/*.db
+docs/aperture_working_key.rtf

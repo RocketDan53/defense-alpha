@@ -1,115 +1,129 @@
 #!/usr/bin/env python3
 """
-One-page analyst note PDF generator.
+Analyst note PDF generator — dark-themed, branded output.
+
+One-page notes use Canvas directly (like generate_insights_teaser.py).
+Multi-page investor leads note uses SimpleDocTemplate + platypus.
 
 Usage:
     python scripts/generate_analyst_note.py
 """
 
+import sys
 from datetime import date
 from pathlib import Path
 
-from fpdf import FPDF
+PROJECT_DIR = Path(__file__).parent.parent
+sys.path.insert(0, str(PROJECT_DIR))
 
-# Dark navy brand color: #1B2A4A
-BRAND_R, BRAND_G, BRAND_B = 27, 42, 74
+from reportlab.pdfbase import pdfmetrics
+from reportlab.pdfgen.canvas import Canvas
+from reportlab.platypus import (
+    SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle,
+    HRFlowable, KeepTogether,
+)
+
+from reporting.aperture_style import (
+    DARK_BG, ACCENT, ACCENT_LIGHT, TEXT_PRIMARY, TEXT_SECONDARY, WHITE,
+    BORDER_SUBTLE, CARD_BG, PAGE, FONTS,
+    paragraph_styles, data_table_style, AperturePageTemplate,
+    draw_background, draw_header, draw_footer, draw_divider,
+    safe_text,
+)
+from reporting.aperture_flowables import (
+    branded_table, label_value_para, section_divider,
+)
+
+ML = PAGE["margin_left"]
+CW = PAGE["content_width"]
 
 
-def safe_text(text):
-    """Sanitize text for latin-1 compatible PDF fonts."""
-    if not isinstance(text, str):
-        text = str(text)
-    text = text.replace("\u2014", " - ")
-    text = text.replace("\u2013", "-")
-    text = text.replace("\u2018", "'")
-    text = text.replace("\u2019", "'")
-    text = text.replace("\u201c", '"')
-    text = text.replace("\u201d", '"')
-    text = text.replace("\u2026", "...")
-    text = text.replace("\u2192", "->")
-    try:
-        text.encode("latin-1")
-        return text
-    except UnicodeEncodeError:
-        return text.encode("latin-1", errors="replace").decode("latin-1")
+# ── Canvas Helpers ─────────────────────────────────────────────────────────
+
+def _wrap_text(c, text, x, y, max_width, font_name, font_size, color, leading=None):
+    """Draw text with word wrapping. Returns Y position after the last line."""
+    if leading is None:
+        leading = font_size * 1.45
+    c.setFont(font_name, font_size)
+    c.setFillColor(color)
+
+    words = text.split()
+    lines = []
+    current_line = ""
+    for word in words:
+        test = f"{current_line} {word}".strip()
+        if pdfmetrics.stringWidth(test, font_name, font_size) <= max_width:
+            current_line = test
+        else:
+            if current_line:
+                lines.append(current_line)
+            current_line = word
+    if current_line:
+        lines.append(current_line)
+
+    for line in lines:
+        c.drawString(x, y, line)
+        y -= leading
+    return y
 
 
-class AnalystNotePDF(FPDF):
+def _section_heading(c, y, text):
+    """Draw a section heading and return Y below it."""
+    c.setFont("Helvetica-Bold", 8.5)
+    c.setFillColor(ACCENT_LIGHT)
+    c.drawString(ML, y, text.upper())
+    return y - 13
 
-    def __init__(self, note_date=None, **kwargs):
-        super().__init__(**kwargs)
-        self._note_date = note_date or date.today().strftime("%B %d, %Y")
 
-    def header(self):
-        self.set_font("Helvetica", "B", 9)
-        self.set_text_color(BRAND_R, BRAND_G, BRAND_B)
-        self.cell(0, 5, "APERTURE", align="L")
-        self.cell(0, 5, "Analyst Note", align="R", new_x="LMARGIN", new_y="NEXT")
-        self.set_draw_color(BRAND_R, BRAND_G, BRAND_B)
-        self.set_line_width(0.4)
-        self.line(self.l_margin, self.get_y(), self.w - self.r_margin, self.get_y())
-        self.ln(3)
+def _body_text(c, y, text, size=8, max_width=None):
+    """Draw wrapped body text. Returns Y after text."""
+    if max_width is None:
+        max_width = CW
+    return _wrap_text(c, text, ML, y, max_width,
+                      "Helvetica", size, TEXT_SECONDARY, leading=size * 1.45)
 
-    def footer(self):
-        self.set_y(-10)
-        self.set_font("Helvetica", "I", 6.5)
-        self.set_text_color(120, 120, 120)
-        usable = self.w - self.l_margin - self.r_margin
-        third = usable / 3
-        self.cell(third, 5, "Aperture | Proprietary & Confidential", align="L")
-        self.cell(third, 5, "contact@aperturesignals.com", align="C")
-        self.cell(third, 5, "", align="R")
 
-    def section_heading(self, text):
-        self.set_font("Helvetica", "B", 8.5)
-        self.set_text_color(BRAND_R, BRAND_G, BRAND_B)
-        self.cell(0, 4.5, text.upper(), new_x="LMARGIN", new_y="NEXT")
-        self.ln(0.5)
-
-    def prose(self, text, size=8):
-        self.set_font("Helvetica", "", size)
-        self.set_text_color(40, 40, 40)
-        self.multi_cell(0, 3.6, safe_text(text))
-        self.ln(1.2)
-
+# ── Build Functions ────────────────────────────────────────────────────────
 
 def build_firestorm_note(output_path):
-    pdf = AnalystNotePDF(
-        note_date="February 24, 2026",
-        orientation="P", unit="mm", format="A4",
-    )
-    pdf.set_auto_page_break(auto=False)
-    pdf.set_margins(15, 12, 15)
-    pdf.add_page()
+    out = Path(output_path)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    w, h = PAGE["size"]
+    c = Canvas(str(out), pagesize=PAGE["size"])
+
+    # Page chrome
+    draw_background(c)
+    draw_header(c, "Analyst Note", date_str="February 2026")
+    draw_footer(c, page_num=1)
+
+    y = h - 70
 
     # Title block
-    pdf.set_font("Helvetica", "B", 13)
-    pdf.set_text_color(BRAND_R, BRAND_G, BRAND_B)
-    pdf.cell(0, 6, safe_text("Firestorm Labs: Drone Dominance Competitive Positioning"),
-             new_x="LMARGIN", new_y="NEXT")
-    pdf.set_font("Helvetica", "", 8)
-    pdf.set_text_color(100, 100, 100)
-    pdf.cell(0, 4, "February 24, 2026", new_x="LMARGIN", new_y="NEXT")
-    pdf.ln(2.5)
+    c.setFillColor(TEXT_PRIMARY)
+    c.setFont("Helvetica-Bold", 13)
+    c.drawString(ML, y, "Firestorm Labs: Drone Dominance Competitive Positioning")
+    y -= 14
+    c.setFillColor(TEXT_SECONDARY)
+    c.setFont("Helvetica", 8)
+    c.drawString(ML, y, "February 24, 2026")
+    y -= 8
 
-    # Thin divider
-    pdf.set_draw_color(200, 200, 200)
-    pdf.set_line_width(0.2)
-    pdf.line(pdf.l_margin, pdf.get_y(), pdf.w - pdf.r_margin, pdf.get_y())
-    pdf.ln(3)
+    y = draw_divider(c, y)
+    y -= 14
 
     # PROGRAM CONTEXT
-    pdf.section_heading("Program Context")
-    pdf.prose(
+    y = _section_heading(c, y, "Program Context")
+    y = _body_text(c, y,
         "The Drone Dominance Program is a $1.1B, four-phase DoD initiative to field "
         "200,000+ low-cost one-way attack drones by 2027. Twenty-five vendors are "
         "competing in the Phase I \"Gauntlet\" at Fort Benning through early March, "
         "with $150M in prototype delivery orders at stake."
     )
+    y -= 6
 
     # WHAT THE PROGRAM REWARDS
-    pdf.section_heading("What the Program Rewards")
-    pdf.prose(
+    y = _section_heading(c, y, "What the Program Rewards")
+    y = _body_text(c, y,
         "DIU is executing. Military operators fly and evaluate - this is a field "
         "performance test, not a paper competition. The program explicitly drives "
         "unit costs down across phases while scaling production volume. The winning "
@@ -117,10 +131,11 @@ def build_firestorm_note(output_path):
         "reliable, and affordable one. Companies that can demonstrate manufacturing "
         "throughput and rapid delivery have a structural advantage."
     )
+    y -= 6
 
     # FIRESTORM'S ADVANTAGES
-    pdf.section_heading("Firestorm's Advantages")
-    pdf.prose(
+    y = _section_heading(c, y, "Firestorm's Advantages")
+    y = _body_text(c, y,
         "$45.2M in private capital across 6 rounds positions Firestorm as "
         "the second-best capitalized private company in the Drone Dominance "
         "field, behind only Auterion ($87.7M), and well-resourced to absorb "
@@ -132,10 +147,11 @@ def build_firestorm_note(output_path):
         "composite signal score of 7.60 with strong funding velocity confirms "
         "sustained investor and government confidence."
     )
+    y -= 6
 
     # COMPETITIVE RISKS
-    pdf.section_heading("Competitive Risks")
-    pdf.prose(
+    y = _section_heading(c, y, "Competitive Risks")
+    y = _body_text(c, y,
         "Firestorm has zero production contracts to date - no demonstrated ability "
         "to deliver at scale. Kratos SRE is a publicly traded defense company with "
         "established UAS production lines and an existing DoD delivery track record. "
@@ -144,10 +160,11 @@ def build_firestorm_note(output_path):
         "Defense Drones Tech Corp brings combat-tested, battlefield-proven systems. "
         "Capital does not fly drones at the Gauntlet - the product does."
     )
+    y -= 6
 
     # HISTORICAL PATTERN
-    pdf.section_heading("Historical Pattern")
-    pdf.prose(
+    y = _section_heading(c, y, "Historical Pattern")
+    y = _body_text(c, y,
         "Across Aperture's knowledge graph of 11,000+ defense technology entities, "
         "companies with production contract traction raised 3.4x more capital than "
         "those without (median $14.4M vs $3.8M in comparable aerospace companies). "
@@ -157,77 +174,66 @@ def build_firestorm_note(output_path):
         "17-month gap since Phase II without a production contract enters the risk "
         "zone where comparable companies begin to stall."
     )
+    y -= 6
 
     # WHAT TO WATCH
-    pdf.section_heading("What to Watch")
-    pdf.prose(
+    y = _section_heading(c, y, "What to Watch")
+    y = _body_text(c, y,
         "Gauntlet results are expected in early March. Key indicators: which vendors "
         "receive prototype orders, order sizes relative to the $150M pool, and "
         "delivery timeline requirements. A Firestorm selection with a meaningful "
         "order share would be the strongest validation signal to date."
     )
 
-    # Write
-    out = Path(output_path)
-    out.parent.mkdir(parents=True, exist_ok=True)
-    pdf.output(str(out))
+    c.save()
     return str(out)
 
 
 def build_firestorm_note_v2(output_path):
     """V2 analyst note: updated Feb 25, 2026 with deal brief data."""
-    pdf = AnalystNotePDF(
-        note_date="February 25, 2026",
-        orientation="P", unit="mm", format="A4",
-    )
-    pdf.set_auto_page_break(auto=False)
-    pdf.set_margins(15, 12, 15)
-    pdf.add_page()
+    out = Path(output_path)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    w, h = PAGE["size"]
+    c = Canvas(str(out), pagesize=PAGE["size"])
+
+    # Page chrome
+    draw_background(c)
+    draw_header(c, "Analyst Note", date_str="February 2026")
+    draw_footer(c, page_num=1)
+
+    y = h - 70
 
     # Title block
-    pdf.set_font("Helvetica", "B", 12.5)
-    pdf.set_text_color(BRAND_R, BRAND_G, BRAND_B)
-    pdf.cell(0, 6, safe_text("Firestorm Labs | Drone Dominance Positioning"),
-             new_x="LMARGIN", new_y="NEXT")
-    pdf.set_font("Helvetica", "", 8)
-    pdf.set_text_color(100, 100, 100)
-    pdf.cell(0, 4, "February 25, 2026", new_x="LMARGIN", new_y="NEXT")
-    pdf.ln(2)
+    c.setFillColor(TEXT_PRIMARY)
+    c.setFont("Helvetica-Bold", 12.5)
+    c.drawString(ML, y, "Firestorm Labs | Drone Dominance Positioning")
+    y -= 14
+    c.setFillColor(TEXT_SECONDARY)
+    c.setFont("Helvetica", 8)
+    c.drawString(ML, y, "February 25, 2026")
+    y -= 8
 
-    # Thin divider
-    pdf.set_draw_color(200, 200, 200)
-    pdf.set_line_width(0.2)
-    pdf.line(pdf.l_margin, pdf.get_y(), pdf.w - pdf.r_margin, pdf.get_y())
-    pdf.ln(2.5)
-
-    # --- Helper for mixed-case section headings ---
-    def section(title):
-        pdf.set_font("Helvetica", "B", 8.5)
-        pdf.set_text_color(BRAND_R, BRAND_G, BRAND_B)
-        pdf.cell(0, 4.5, safe_text(title), new_x="LMARGIN", new_y="NEXT")
-        pdf.ln(0.5)
+    y = draw_divider(c, y)
+    y -= 14
 
     body_size = 8.5
-    line_h = 3.5
+    line_h = body_size * 1.45
 
-    # 1. Bottom Line
-    section("Bottom Line")
-    pdf.set_font("Helvetica", "", body_size)
-    pdf.set_text_color(40, 40, 40)
-    pdf.multi_cell(0, line_h, safe_text(
+    # Bottom Line
+    y = _section_heading(c, y, "Bottom Line")
+    y = _wrap_text(c,
         "Firestorm enters the Phase I Gauntlet as one of the strongest positioned "
         "vendors in the 25-company field. A $100M Air Force IDIQ, $45.2M in private "
         "capital, and deployable manufacturing capability place them in the top tier "
         "- one of only a handful of participants with both production-scale government "
-        "validation and significant private backing."
-    ))
-    pdf.ln(1.5)
+        "validation and significant private backing.",
+        ML, y, CW, "Helvetica", body_size, TEXT_SECONDARY, leading=line_h,
+    )
+    y -= 8
 
-    # 2. Firestorm's Edge
-    section("Firestorm's Edge")
-    pdf.set_font("Helvetica", "", body_size)
-    pdf.set_text_color(40, 40, 40)
-    pdf.multi_cell(0, line_h, safe_text(
+    # Firestorm's Edge
+    y = _section_heading(c, y, "Firestorm's Edge")
+    y = _wrap_text(c,
         "Firestorm's government traction anchors on a $100M Air Force IDIQ awarded "
         "through the AFWERX Prime Proving Ground, which validates production-scale "
         "confidence from the service branch most invested in small UAS. The company "
@@ -240,15 +246,14 @@ def build_firestorm_note_v2(output_path):
         "Multi Jet Fusion 3D printing and a Lockheed Martin consortium add industrial "
         "depth, while an Orqa partnership delivers an NDAA-compliant FPV quadcopter. "
         "Aperture scores Firestorm at 7.60 composite (Tier 1) with the fastest Phase I "
-        "to Phase II graduation in its cohort at four months."
-    ))
-    pdf.ln(1.5)
+        "to Phase II graduation in its cohort at four months.",
+        ML, y, CW, "Helvetica", body_size, TEXT_SECONDARY, leading=line_h,
+    )
+    y -= 8
 
-    # 3. Competitive Threats
-    section("Competitive Threats")
-    pdf.set_font("Helvetica", "", body_size)
-    pdf.set_text_color(40, 40, 40)
-    pdf.multi_cell(0, line_h, safe_text(
+    # Competitive Threats
+    y = _section_heading(c, y, "Competitive Threats")
+    y = _wrap_text(c,
         "Kratos SRE is the most dangerous competitor - publicly traded, established UAS "
         "production lines, and a DoD delivery track record that Firestorm cannot yet "
         "match. Auterion's $87.7M war chest and strong autonomy software platform make "
@@ -257,19 +262,13 @@ def build_firestorm_note_v2(output_path):
         "data no domestic vendor can replicate. Beyond the headliners, several lean "
         "competitors may undercut on unit cost as the program deliberately drives "
         "prices down across phases - the Gauntlet rewards affordability and scale, "
-        "not just capability."
-    ))
-    pdf.ln(1.5)
+        "not just capability.",
+        ML, y, CW, "Helvetica", body_size, TEXT_SECONDARY, leading=line_h,
+    )
+    y -= 8
 
-    # 4. The Data (table)
-    section("The Data")
-    pdf.ln(0.5)
-
-    tbl_font = 7.5
-    row_h = 4.0
-    col_w_label = 48
-    col_w_value = pdf.w - pdf.l_margin - pdf.r_margin - col_w_label
-
+    # The Data (stat table in dark card)
+    y = _section_heading(c, y, "The Data")
     table_data = [
         ("Signal Score", "7.60 (Tier 1)"),
         ("Private Capital", "$45.2M (6 rounds)"),
@@ -279,292 +278,204 @@ def build_firestorm_note_v2(output_path):
         ("Gauntlet Field Rank (Capital)", "#2 of 25"),
     ]
 
-    # Header row
-    pdf.set_font("Helvetica", "B", tbl_font)
-    pdf.set_fill_color(BRAND_R, BRAND_G, BRAND_B)
-    pdf.set_text_color(255, 255, 255)
-    pdf.cell(col_w_label, row_h, "  Metric", border=1, fill=True)
-    pdf.cell(col_w_value, row_h, "  Value", border=1, fill=True,
-             new_x="LMARGIN", new_y="NEXT")
+    card_h = len(table_data) * 14 + 6
+    c.setFillColor(CARD_BG)
+    c.roundRect(ML - 2, y - card_h + 6, CW + 4, card_h, 4, fill=1, stroke=0)
 
-    # Data rows
-    pdf.set_font("Helvetica", "", tbl_font)
-    pdf.set_text_color(40, 40, 40)
-    for i, (metric, value) in enumerate(table_data):
-        if i % 2 == 0:
-            pdf.set_fill_color(245, 245, 250)
-        else:
-            pdf.set_fill_color(255, 255, 255)
-        pdf.cell(col_w_label, row_h, safe_text(f"  {metric}"), border="LRB", fill=True)
-        pdf.cell(col_w_value, row_h, safe_text(f"  {value}"), border="RB", fill=True,
-                 new_x="LMARGIN", new_y="NEXT")
+    for metric, value in table_data:
+        c.setFont("Helvetica-Bold", 7.5)
+        c.setFillColor(TEXT_SECONDARY)
+        c.drawString(ML + 4, y, metric)
+        c.setFont("Helvetica", 7.5)
+        c.setFillColor(TEXT_PRIMARY)
+        c.drawString(ML + 150, y, value)
+        y -= 14
+    y -= 4
 
-    pdf.ln(2)
-
-    # 5. Historical Pattern
-    section("Historical Pattern")
-    pdf.set_font("Helvetica", "", body_size)
-    pdf.set_text_color(40, 40, 40)
-    pdf.multi_cell(0, line_h, safe_text(
+    # Historical Pattern
+    y = _section_heading(c, y, "Historical Pattern")
+    y = _wrap_text(c,
         "Across Aperture's knowledge graph of 11,000+ defense entities, companies with "
         "production contract traction raised 3.4x more capital than those without. "
         "Firestorm already has that traction. The Gauntlet isn't about proving they "
         "belong - it's about securing order share that accelerates a trajectory "
-        "already underway."
-    ))
-    pdf.ln(1.5)
+        "already underway.",
+        ML, y, CW, "Helvetica", body_size, TEXT_SECONDARY, leading=line_h,
+    )
+    y -= 8
 
-    # 6. What to Watch
-    section("What to Watch")
-    pdf.set_font("Helvetica", "", body_size)
-    pdf.set_text_color(40, 40, 40)
-    pdf.multi_cell(0, line_h, safe_text(
+    # What to Watch
+    y = _section_heading(c, y, "What to Watch")
+    y = _wrap_text(c,
         "Gauntlet results expected early March. The key metric is Firestorm's share "
-        "of the $150M prototype pool relative to Kratos and Auterion."
-    ))
+        "of the $150M prototype pool relative to Kratos and Auterion.",
+        ML, y, CW, "Helvetica", body_size, TEXT_SECONDARY, leading=line_h,
+    )
 
-    # Data provenance line (above footer)
-    pdf.set_y(-16)
-    pdf.set_draw_color(200, 200, 200)
-    pdf.set_line_width(0.15)
-    pdf.line(pdf.l_margin, pdf.get_y(), pdf.w - pdf.r_margin, pdf.get_y())
-    pdf.ln(1)
-    pdf.set_font("Helvetica", "I", 6)
-    pdf.set_text_color(140, 140, 140)
-    pdf.cell(0, 3.5, safe_text(
+    # Data provenance line
+    prov_y = 42
+    c.setStrokeColor(BORDER_SUBTLE)
+    c.setLineWidth(0.25)
+    c.line(ML, prov_y, PAGE["width"] - PAGE["margin_right"], prov_y)
+    c.setFont("Helvetica-Oblique", 6)
+    c.setFillColor(TEXT_SECONDARY)
+    c.drawString(ML, prov_y - 10,
         "Data sourced from SBIR.gov, SEC EDGAR, USASpending.gov, and public reporting. "
-        "Verified February 25, 2026."
-    ), align="L")
+        "Verified February 25, 2026.")
 
-    # Write
-    out = Path(output_path)
-    out.parent.mkdir(parents=True, exist_ok=True)
-    pdf.output(str(out))
+    c.save()
     return str(out)
 
 
-class InvestorIntelPDF(FPDF):
-    """PDF with 'Investor Intelligence' header instead of 'Analyst Note'."""
-
-    def header(self):
-        self.set_font("Helvetica", "B", 9)
-        self.set_text_color(BRAND_R, BRAND_G, BRAND_B)
-        self.cell(0, 5, "APERTURE", align="L")
-        self.cell(0, 5, "Investor Intelligence", align="R", new_x="LMARGIN", new_y="NEXT")
-        self.set_draw_color(BRAND_R, BRAND_G, BRAND_B)
-        self.set_line_width(0.4)
-        self.line(self.l_margin, self.get_y(), self.w - self.r_margin, self.get_y())
-        self.ln(3)
-
-    def footer(self):
-        self.set_y(-10)
-        self.set_font("Helvetica", "I", 6.5)
-        self.set_text_color(120, 120, 120)
-        usable = self.w - self.l_margin - self.r_margin
-        third = usable / 3
-        self.cell(third, 5, "Aperture | Proprietary & Confidential", align="L")
-        self.cell(third, 5, "contact@aperturesignals.com", align="C")
-        self.cell(third, 5, f"Page {self.page_no()}", align="R")
-
-
 def build_investor_leads_note(output_path):
-    """Investor leads PDF for anti-jam GPS antenna raise."""
-    pdf = InvestorIntelPDF(orientation="P", unit="mm", format="A4")
-    pdf.set_auto_page_break(auto=True, margin=15)
-    pdf.set_margins(15, 12, 15)
-    pdf.add_page()
+    """Investor leads PDF for anti-jam GPS antenna raise — multi-page."""
+    out = Path(output_path)
+    out.parent.mkdir(parents=True, exist_ok=True)
 
-    body = 7.5
-    line_h = 3.3
-    bullet_h = 3.2
+    s = paragraph_styles()
 
-    def section(title):
-        pdf.set_font("Helvetica", "B", 8.5)
-        pdf.set_text_color(BRAND_R, BRAND_G, BRAND_B)
-        pdf.cell(0, 4.5, safe_text(title), new_x="LMARGIN", new_y="NEXT")
-        pdf.ln(0.5)
+    doc = SimpleDocTemplate(
+        str(out),
+        pagesize=PAGE["size"],
+        topMargin=PAGE["margin_top"],
+        bottomMargin=PAGE["margin_bottom"],
+        leftMargin=PAGE["margin_left"],
+        rightMargin=PAGE["margin_right"],
+    )
 
-    def lead_heading(text):
-        pdf.set_font("Helvetica", "B", body)
-        pdf.set_text_color(BRAND_R, BRAND_G, BRAND_B)
-        pdf.cell(0, 3.8, safe_text(text), new_x="LMARGIN", new_y="NEXT")
-        pdf.ln(0.3)
-
-    def priority_line(text):
-        pdf.set_font("Helvetica", "BI", body)
-        pdf.set_text_color(80, 80, 80)
-        pdf.cell(0, 3.2, safe_text(text), new_x="LMARGIN", new_y="NEXT")
-        pdf.ln(0.3)
-
-    def bullet(text):
-        pdf.set_font("Helvetica", "", body)
-        pdf.set_text_color(40, 40, 40)
-        x = pdf.get_x()
-        pdf.cell(4, bullet_h, safe_text("\x95"))
-        pdf.multi_cell(0, bullet_h, safe_text(text))
-        pdf.ln(0.2)
+    story = []
 
     # Title block
-    pdf.set_font("Helvetica", "B", 12)
-    pdf.set_text_color(BRAND_R, BRAND_G, BRAND_B)
-    pdf.cell(0, 6, safe_text("Investor List: Anti-Jam GPS Antenna ($2.5M Raise)"),
-             new_x="LMARGIN", new_y="NEXT")
-    pdf.set_font("Helvetica", "", 8)
-    pdf.set_text_color(100, 100, 100)
-    pdf.cell(0, 4, "February 25, 2026  |  Prepared for Don Novotny",
-             new_x="LMARGIN", new_y="NEXT")
-    pdf.ln(1)
+    story.append(Paragraph(
+        "Investor List: Anti-Jam GPS Antenna ($2.5M Raise)", s["section_head"],
+    ))
+    story.append(Paragraph(
+        "February 25, 2026  |  Prepared for Don Novotny", s["body"],
+    ))
+    story.append(Spacer(1, 4))
 
     # Source and caveat
-    pdf.set_font("Helvetica", "", 7)
-    pdf.set_text_color(100, 100, 100)
-    pdf.cell(0, 3, "Source: SEC EDGAR Form D filings", new_x="LMARGIN", new_y="NEXT")
-    pdf.ln(0.5)
-    pdf.set_font("Helvetica", "I", 6.5)
-    pdf.set_text_color(120, 120, 120)
-    pdf.multi_cell(0, 2.8, safe_text(
-        "Note: These individuals appear as directors on SEC Form D filings for "
+    story.append(Paragraph("Source: SEC EDGAR Form D filings", s["body"]))
+    story.append(Paragraph(
+        "<i>Note: These individuals appear as directors on SEC Form D filings for "
         "relevant companies. Some may be investors, others may be board advisors "
-        "or operators. Recommend verifying investment role before outreach."
+        "or operators. Recommend verifying investment role before outreach.</i>",
+        s["disclaimer"],
     ))
-    pdf.ln(1.5)
+    story.append(Spacer(1, 4))
+    story.append(section_divider())
 
-    # Thin divider
-    pdf.set_draw_color(200, 200, 200)
-    pdf.set_line_width(0.2)
-    pdf.line(pdf.l_margin, pdf.get_y(), pdf.w - pdf.r_margin, pdf.get_y())
-    pdf.ln(2.5)
+    # Lead data
+    leads = [
+        ("Tier 1: Active GPS/PNT Thesis Investors", [
+            ("1. Jamie Goldstein - Pillar VC", "Very High - GPS/PNT thesis, recent, right size", [
+                "Director at Tycho AI ($9.8M Series A, March 2025) - autonomous navigation / high-precision PNT",
+                "Only 11 months ago - active and deploying",
+                'Tycho SBIR: "High-precision Low-SWAP Robust Autonomy & Navigation" - direct technology overlap',
+                "Deal size ($9.8M Series A) indicates comfort with early-stage defense GPS companies",
+            ]),
+            ("2. Richard Clarke - Strategic Advisor, IVP", "Very High - Same deal as Goldstein", [
+                "Co-director at Tycho AI ($9.8M, March 2025) alongside Goldstein",
+                "Likely represents a different fund or is an independent board member",
+                "Same thesis fit and recency as Goldstein",
+            ]),
+            ("3. Ryan Johnson - Subutai Capital Partners", "Very High - GPS/PNT thesis, multi-board, very recent", [
+                "Director at Xona Space Systems ($74.6M, June 2025) - commercial GNSS alternative constellation",
+                "Also director at Hydrosat ($17.9M, Aug 2025) - two active boards in 2025",
+                'Xona SBIR: "GNSS Health and Operational Status Tracking" - directly adjacent to anti-jam GPS',
+                "Multi-board presence signals active, high-velocity deployer",
+            ]),
+            ("4. Karim Faris - Google Ventures", "High - GPS/PNT thesis, multi-board, GV partner", [
+                "Director at OneNav ($16.1M, March 2023) - GPS/PNT positioning technology",
+                "Also director at Premise Data Corporation ($50M, 2015)",
+                "OneNav is one of the closest technology matches to anti-jam GPS in the dataset",
+            ]),
+            ("5. Manu Kumar - K9 Ventures", "High - Navigation thesis, recent, right size", [
+                "Director at Compound Eye ($12.8M, March 2025) - passive 3D sensor for autonomous aerial navigation",
+                'SBIR: "Passive 3D Sensor for Autonomous Aerial Navigation" - GPS-denied navigation overlap',
+                "Very recent (March 2025) and deal size range ($12.8M) indicates willingness to lead early rounds",
+            ]),
+            ("6. Sven Strohband - Khosla Ventures", "High - Same deal as Kumar", [
+                "Co-director at Compound Eye ($12.8M, March 2025) alongside Kumar",
+                "Same navigation thesis and recency",
+            ]),
+        ]),
+        ("Tier 2: RF/EW Adjacent with Defense Pattern", [
+            ("7. Jonathan Hodock - CesiumAstro", "High - Antenna/RF thesis, exact technology match", [
+                "Director at CesiumAstro ($8.5M Series A, Jan 2019) - open phased array antenna systems",
+                'CesiumAstro SBIR: "Sequential TACFI SBIR Phase II Open Phased Array Antenna"',
+                "Closest pure antenna/RF hardware match in the dataset",
+                "Older deal (2019) but CesiumAstro has since raised $100M+ total - thesis was validated",
+            ]),
+            ("8. Mark Spoto - Razor's Edge Ventures", "High - Most connected, defense pattern, RF/EW", [
+                "3 boards - most connected person in the dataset",
+                "Director at X-Bow Launch Systems ($46.5M, 2024), HawkEye 360 ($58M, 2023), 3DEO ($14M, 2018)",
+                "HawkEye 360 is RF geolocation / spectrum monitoring - adjacent to GPS/EW",
+                "Pattern: defense hardware companies at various stages, active through 2024",
+            ]),
+            ("9. Joseph Pignato - Shield Capital", "Moderate-High - RF/spectrum thesis, multi-board", [
+                "Director at Federated Wireless ($51.3M, 2019) AND HawkEye 360 ($35M, 2019)",
+                "Both companies operate in RF spectrum management / geolocation",
+                "RF spectrum expertise is directly relevant to GPS anti-jamming",
+                "Two defense RF boards signals committed thesis in the space",
+            ]),
+            ("10. Chris Alliegro - Meta Venture Partners", "Moderate-High - Antenna thesis, recent, right size", [
+                "Director at Kapta Space Corp ($4.9M Series A, Dec 2024)",
+                'Kapta SBIR: "Steerable X-Band Metasurface Antenna for Spaceborne Radar"',
+                "Very recent (Dec 2024), deal size ($4.9M) is closest match to the $2.5M raise",
+                "Antenna-specific investor at the seed/Series A stage",
+            ]),
+        ]),
+        ("Tier 3: Worth a Conversation", [
+            ("11. Kevin Fong - MVP Ventures", "Moderate - GPS/PNT thesis, complements Faris", [
+                "Director at OneNav ($16.1M, March 2023) alongside Karim Faris (#4)",
+                "OneNav builds GPS/PNT positioning technology - direct thesis match",
+                "Separate fund from Faris, expanding the reach into OneNav's investor syndicate",
+                "If Faris doesn't bite, Fong is an alternate path into the same GPS-thesis network",
+            ]),
+            ("12. Trae Stephens - Anduril", "Moderate - Defense thesis, Founders Fund network", [
+                "Director at Gecko Robotics ($121.5M, May 2025) and Varda Space Industries ($42.2M, 2021)",
+                "Known Founders Fund partner with deep defense tech portfolio (Anduril co-founder)",
+                "Not GPS-specific, but broad defense autonomy thesis and strongest network for syndicate intros",
+            ]),
+        ]),
+    ]
 
-    # --- TIER 1 ---
-    section("Tier 1: Active GPS/PNT Thesis Investors")
+    for tier_name, tier_leads in leads:
+        story.append(Paragraph(safe_text(tier_name), s["subsection_head"]))
 
-    lead_heading("1. Jamie Goldstein - Pillar VC")
-    priority_line("Very High - GPS/PNT thesis, recent, right size")
-    bullet("Director at Tycho AI ($9.8M Series A, March 2025) - autonomous navigation / high-precision PNT")
-    bullet("Only 11 months ago - active and deploying")
-    bullet('Tycho SBIR: "High-precision Low-SWAP Robust Autonomy & Navigation" - direct technology overlap')
-    bullet("Deal size ($9.8M Series A) indicates comfort with early-stage defense GPS companies")
-    pdf.ln(1)
+        for lead_name, priority, bullets in tier_leads:
+            block = []
+            block.append(Paragraph(f"<b>{safe_text(lead_name)}</b>", s["strategy_name"]))
+            block.append(Paragraph(f"<i>{safe_text(priority)}</i>", s["body_italic"]))
+            for b in bullets:
+                block.append(Paragraph(f"\u2022 {safe_text(b)}", s["bullet"]))
+            block.append(Spacer(1, 6))
+            story.append(KeepTogether(block))
 
-    lead_heading("2. Richard Clarke - Strategic Advisor, IVP")
-    priority_line("Very High - Same deal as Goldstein")
-    bullet("Co-director at Tycho AI ($9.8M, March 2025) alongside Goldstein")
-    bullet("Likely represents a different fund or is an independent board member")
-    bullet("Same thesis fit and recency as Goldstein")
-    pdf.ln(1)
-
-    lead_heading("3. Ryan Johnson - Subutai Capital Partners")
-    priority_line("Very High - GPS/PNT thesis, multi-board, very recent")
-    bullet("Director at Xona Space Systems ($74.6M, June 2025) - commercial GNSS alternative constellation")
-    bullet("Also director at Hydrosat ($17.9M, Aug 2025) - two active boards in 2025")
-    bullet('Xona SBIR: "GNSS Health and Operational Status Tracking" - directly adjacent to anti-jam GPS')
-    bullet("Multi-board presence signals active, high-velocity deployer")
-    pdf.ln(1)
-
-    lead_heading("4. Karim Faris - Google Ventures")
-    priority_line("High - GPS/PNT thesis, multi-board, GV partner")
-    bullet("Director at OneNav ($16.1M, March 2023) - GPS/PNT positioning technology")
-    bullet("Also director at Premise Data Corporation ($50M, 2015)")
-    bullet("OneNav is one of the closest technology matches to anti-jam GPS in the dataset")
-    pdf.ln(1)
-
-    lead_heading("5. Manu Kumar - K9 Ventures")
-    priority_line("High - Navigation thesis, recent, right size")
-    bullet("Director at Compound Eye ($12.8M, March 2025) - passive 3D sensor for autonomous aerial navigation")
-    bullet('SBIR: "Passive 3D Sensor for Autonomous Aerial Navigation" - GPS-denied navigation overlap')
-    bullet("Very recent (March 2025) and deal size range ($12.8M) indicates willingness to lead early rounds")
-    pdf.ln(1)
-
-    lead_heading("6. Sven Strohband - Khosla Ventures")
-    priority_line("High - Same deal as Kumar")
-    bullet("Co-director at Compound Eye ($12.8M, March 2025) alongside Kumar")
-    bullet("Same navigation thesis and recency")
-    pdf.ln(2)
-
-    # --- TIER 2 ---
-    section("Tier 2: RF/EW Adjacent with Defense Pattern")
-
-    lead_heading("7. Jonathan Hodock - CesiumAstro")
-    priority_line("High - Antenna/RF thesis, exact technology match")
-    bullet("Director at CesiumAstro ($8.5M Series A, Jan 2019) - open phased array antenna systems")
-    bullet('CesiumAstro SBIR: "Sequential TACFI SBIR Phase II Open Phased Array Antenna"')
-    bullet("Closest pure antenna/RF hardware match in the dataset")
-    bullet("Older deal (2019) but CesiumAstro has since raised $100M+ total - thesis was validated")
-    pdf.ln(1)
-
-    lead_heading("8. Mark Spoto - Razor's Edge Ventures")
-    priority_line("High - Most connected, defense pattern, RF/EW")
-    bullet("3 boards - most connected person in the dataset")
-    bullet("Director at X-Bow Launch Systems ($46.5M, 2024), HawkEye 360 ($58M, 2023), 3DEO ($14M, 2018)")
-    bullet("HawkEye 360 is RF geolocation / spectrum monitoring - adjacent to GPS/EW")
-    bullet("Pattern: defense hardware companies at various stages, active through 2024")
-    pdf.ln(1)
-
-    lead_heading("9. Joseph Pignato - Shield Capital")
-    priority_line("Moderate-High - RF/spectrum thesis, multi-board")
-    bullet("Director at Federated Wireless ($51.3M, 2019) AND HawkEye 360 ($35M, 2019)")
-    bullet("Both companies operate in RF spectrum management / geolocation")
-    bullet("RF spectrum expertise is directly relevant to GPS anti-jamming")
-    bullet("Two defense RF boards signals committed thesis in the space")
-    pdf.ln(1)
-
-    lead_heading("10. Chris Alliegro - Meta Venture Partners")
-    priority_line("Moderate-High - Antenna thesis, recent, right size")
-    bullet("Director at Kapta Space Corp ($4.9M Series A, Dec 2024)")
-    bullet('Kapta SBIR: "Steerable X-Band Metasurface Antenna for Spaceborne Radar"')
-    bullet("Very recent (Dec 2024), deal size ($4.9M) is closest match to the $2.5M raise")
-    bullet("Antenna-specific investor at the seed/Series A stage")
-    pdf.ln(2)
-
-    # --- TIER 3 ---
-    section("Tier 3: Worth a Conversation")
-
-    lead_heading("11. Kevin Fong - MVP Ventures")
-    priority_line("Moderate - GPS/PNT thesis, complements Faris")
-    bullet("Director at OneNav ($16.1M, March 2023) alongside Karim Faris (#4)")
-    bullet("OneNav builds GPS/PNT positioning technology - direct thesis match")
-    bullet("Separate fund from Faris, expanding the reach into OneNav's investor syndicate")
-    bullet("If Faris doesn't bite, Fong is an alternate path into the same GPS-thesis network")
-    pdf.ln(1)
-
-    lead_heading("12. Trae Stephens - Anduril")
-    priority_line("Moderate - Defense thesis, Founders Fund network")
-    bullet("Director at Gecko Robotics ($121.5M, May 2025) and Varda Space Industries ($42.2M, 2021)")
-    bullet("Known Founders Fund partner with deep defense tech portfolio (Anduril co-founder)")
-    bullet("Not GPS-specific, but broad defense autonomy thesis and strongest network for syndicate intros")
-    pdf.ln(2)
-
-    # --- Summary ---
-    pdf.set_draw_color(200, 200, 200)
-    pdf.set_line_width(0.15)
-    pdf.line(pdf.l_margin, pdf.get_y(), pdf.w - pdf.r_margin, pdf.get_y())
-    pdf.ln(2)
-
-    section("Summary")
-    pdf.set_font("Helvetica", "", body)
-    pdf.set_text_color(40, 40, 40)
-    pdf.multi_cell(0, line_h, safe_text(
+    # Summary
+    story.append(section_divider())
+    story.append(Paragraph("Summary", s["subsection_head"]))
+    story.append(Paragraph(safe_text(
         "The strongest leads are Goldstein and Clarke at Tycho AI - a March 2025 "
         "GPS/PNT navigation deal at the right stage with direct SBIR overlap. "
         "Ryan Johnson is the most active deployer with two 2025 boards including "
         "Xona (GNSS). On the RF/antenna side, Hodock at CesiumAstro has the closest "
         "hardware-level technology match. Alliegro at Kapta Space is the best fit on "
         "deal size ($4.9M, Dec 2024) for a $2.5M raise."
-    ))
+    ), s["body"]))
 
     # Provenance
-    pdf.ln(3)
-    pdf.set_font("Helvetica", "I", 6)
-    pdf.set_text_color(140, 140, 140)
-    pdf.cell(0, 3.5, safe_text(
+    story.append(Spacer(1, 8))
+    story.append(Paragraph(
         "Synthesized from SEC EDGAR Form D filings across 182 defense companies. "
-        "Generated February 25, 2026."
-    ), align="L")
+        "Generated February 25, 2026.",
+        s["disclaimer"],
+    ))
 
-    # Write
-    out = Path(output_path)
-    out.parent.mkdir(parents=True, exist_ok=True)
-    pdf.output(str(out))
+    # Build
+    template = AperturePageTemplate("Investor Intelligence", date_str="February 2026")
+    doc.build(story, onFirstPage=template, onLaterPages=template)
     return str(out)
 
 
