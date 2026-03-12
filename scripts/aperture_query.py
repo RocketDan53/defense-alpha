@@ -1196,7 +1196,37 @@ def build_verification_notes(
     lines.append("")
 
     if no_verify or no_claude:
-        lines.append("*Verification skipped.*\n")
+        # Still provide a structured data-source summary from the DB
+        name = entity["canonical_name"]
+        sbir_count = conn.execute(
+            "SELECT COUNT(*) as cnt FROM funding_events "
+            "WHERE entity_id = ? AND event_type IN "
+            "('SBIR_PHASE_1','SBIR_PHASE_2','SBIR_PHASE_3')",
+            (entity_id,),
+        ).fetchone()["cnt"]
+        regd_count = conn.execute(
+            "SELECT COUNT(*) as cnt FROM funding_events "
+            "WHERE entity_id = ? AND event_type IN ('REG_D_FILING', 'PRIVATE_ROUND')",
+            (entity_id,),
+        ).fetchone()["cnt"]
+        contract_count = conn.execute(
+            "SELECT COUNT(*) as cnt FROM contracts WHERE entity_id = ?",
+            (entity_id,),
+        ).fetchone()["cnt"]
+        contract_val = conn.execute(
+            "SELECT COALESCE(SUM(contract_value), 0) as total FROM contracts WHERE entity_id = ?",
+            (entity_id,),
+        ).fetchone()["total"]
+
+        lines.append(f"- **SBIR data**: SBIR.gov — {sbir_count} award(s) found for {name}")
+        lines.append(f"- **SEC filings**: SEC EDGAR — {regd_count} Reg D filing(s) found")
+        ctr_detail = f"{contract_count} contract(s) ({_fmt_currency(contract_val)} total)" if contract_count else "no contracts found"
+        lines.append(f"- **Federal contracts**: USASpending.gov — {ctr_detail}")
+        lines.append(f"- **SAM.gov**: Entity registration {'confirmed' if entity.get('sam_uei') else 'not confirmed'}")
+        lines.append("")
+        if not no_verify:
+            lines.append("*Web verification skipped.*")
+        lines.append("")
         return "\n".join(lines)
 
     api_key = settings.ANTHROPIC_API_KEY
@@ -1751,19 +1781,29 @@ def generate_deal_brief(
         )
         print("  [8/9] Data Coverage & Verification Notes")
 
-    # Analyst assessment — adjust prompt for client-facing
-    sections["Analyst Assessment"] = build_analyst_assessment(
-        sections, entity,
-        no_claude=no_claude,
-        client_facing=client_facing,
-        conn=conn,
-        entity_id=entity_id,
-    )
-    print("  [9/9] Analyst Assessment")
+    # Analyst assessment — skip entirely when --no-claude (no placeholder)
+    if not no_claude:
+        sections["Analyst Assessment"] = build_analyst_assessment(
+            sections, entity,
+            no_claude=no_claude,
+            client_facing=client_facing,
+            conn=conn,
+            entity_id=entity_id,
+        )
+        print("  [9/9] Analyst Assessment")
+    else:
+        print("  [9/9] Analyst Assessment (skipped — no-claude)")
 
     if client_facing:
         sections["Key Contacts & Investor Syndicate"] = _build_key_contacts(conn, entity_id)
         print("  [+] Key Contacts & Investor Syndicate")
+
+    # Analyst note — pick up from notes/ file if it exists
+    notes_path = Path(__file__).parent.parent / "notes" / f"{_slug(name)}.md"
+    if notes_path.exists():
+        note_body = notes_path.read_text(encoding="utf-8").strip()
+        sections["Analyst Note"] = f"## Analyst Note\n\n{note_body}"
+        print("  [+] Analyst Note (from notes/)")
 
     # Assemble markdown
     header = f"# Intelligence Brief: {name}" if client_facing else f"# Deal Intelligence Brief: {name}"

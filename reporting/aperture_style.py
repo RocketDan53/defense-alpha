@@ -142,6 +142,7 @@ def paragraph_styles():
         "section_head": ParagraphStyle(
             "SectionHead", fontName="Helvetica-Bold", fontSize=11,
             textColor=WHITE, leading=14, spaceBefore=10, spaceAfter=4,
+            alignment=TA_LEFT,
         ),
         "strategy_name": ParagraphStyle(
             "StrategyName", fontName="Helvetica-Bold", fontSize=10,
@@ -256,7 +257,7 @@ def draw_background(canvas_obj):
     canvas_obj.rect(0, h - 3, w, 3, fill=True, stroke=False)
 
 
-def draw_header(canvas_obj, report_type, date_str=None, confidential_text="PROPRIETARY & CONFIDENTIAL"):
+def draw_header(canvas_obj, report_type, date_str=None, confidential_text="Proprietary & Confidential"):
     """Draw the page header.
 
     Format: APERTURE (left) | [REPORT TYPE] | [DATE] | [CONFIDENTIAL TEXT] (right)
@@ -265,7 +266,7 @@ def draw_header(canvas_obj, report_type, date_str=None, confidential_text="PROPR
         canvas_obj: reportlab canvas.
         report_type: e.g. "NOTIONAL FUND", "Market Intelligence".
         date_str: optional; defaults to current month/year.
-        confidential_text: right-side marking; default all-caps.
+        confidential_text: right-side marking.
     """
     w, h = PAGE_SIZE
     if date_str is None:
@@ -332,7 +333,7 @@ class AperturePageTemplate:
         doc.build(story, onFirstPage=template, onLaterPages=template)
     """
 
-    def __init__(self, report_type, date_str=None, confidential_text="PROPRIETARY & CONFIDENTIAL"):
+    def __init__(self, report_type, date_str=None, confidential_text="Proprietary & Confidential"):
         self.report_type = report_type
         self.date_str = date_str
         self.confidential_text = confidential_text

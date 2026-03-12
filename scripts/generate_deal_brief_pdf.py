@@ -94,7 +94,7 @@ def generate_deal_brief_pdf(
     # ── Footer Note ──
     story.append(Spacer(1, 8))
     story.append(Paragraph(
-        f"APERTURE SIGNALS INTELLIGENCE | PROPRIETARY &amp; CONFIDENTIAL | {safe_text(REPORT_DATE)}<br/>"
+        f"Aperture Signals Intelligence | Proprietary &amp; Confidential | {safe_text(REPORT_DATE)}<br/>"
         "Data sourced from SBIR.gov, SEC EDGAR, USASpending.gov, SAM.gov",
         s["disclaimer"],
     ))

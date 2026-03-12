@@ -17,6 +17,7 @@ import re
 from reportlab.lib.units import inch
 from reportlab.platypus import (
     Paragraph, Spacer, Table, TableStyle, HRFlowable, PageBreak,
+    KeepTogether,
 )
 
 from reporting.aperture_style import (
@@ -144,12 +145,34 @@ def markdown_to_flowables(md_text, styles=None):
             i += 1
             continue
 
-        # Sub-headers (### level)
+        # Sub-headers (### level) — keep with following content block
         if stripped.startswith("### "):
-            flowables.append(Paragraph(
+            heading_para = Paragraph(
                 safe_text(stripped.lstrip("# ")), s["subsection_head"],
-            ))
-            i += 1
+            )
+            # Peek ahead: if next non-blank line is a table, keep them together
+            j = i + 1
+            while j < len(lines) and not lines[j].strip():
+                j += 1
+            if j < len(lines) and lines[j].strip().startswith("|"):
+                # Gather table lines
+                table_lines = []
+                while j < len(lines) and lines[j].strip().startswith("|"):
+                    table_lines.append(lines[j])
+                    j += 1
+                headers, rows = _parse_md_table(table_lines)
+                if headers and rows is not None:
+                    flowables.append(KeepTogether([
+                        heading_para,
+                        branded_table(headers, rows),
+                        Spacer(1, 4),
+                    ]))
+                else:
+                    flowables.append(heading_para)
+                i = j
+            else:
+                flowables.append(heading_para)
+                i += 1
             continue
 
         # Table block: accumulate contiguous | lines
