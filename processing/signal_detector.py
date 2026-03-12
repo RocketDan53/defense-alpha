@@ -70,6 +70,15 @@ SIGNAL_CONTRACT_VALUE_STEP_CHANGE = "contract_value_step_change"
 # SBIR reauthorization signals (March 2026)
 SIGNAL_STRATEGIC_BREAKTHROUGH_AWARD = "strategic_breakthrough_award"
 
+# Policy headwind signal (negative — declining budget areas)
+SIGNAL_POLICY_HEADWIND = "policy_headwind"
+
+# Contract acceleration signal (R&D to production ramp)
+SIGNAL_CONTRACT_ACCELERATION = "contract_acceleration"
+
+# SBIR breadth signal (broad government validation across agencies/domains)
+SIGNAL_SBIR_BREADTH = "sbir_breadth"
+
 # High-priority technology areas for defense
 HIGH_PRIORITY_TECH = {
     "ai_ml", "autonomy", "quantum", "hypersonics", "cyber",
@@ -281,6 +290,12 @@ class SignalDetector:
             "ota_bridge_award": self.detect_ota_bridge_award(),
             "multi_vehicle_presence": self.detect_multi_vehicle_presence(),
             "contract_value_step_change": self.detect_contract_value_step_change(),
+            # Contract acceleration (R&D to production ramp)
+            "contract_acceleration": self.detect_contract_acceleration(),
+            # SBIR breadth (broad government validation)
+            "sbir_breadth": self.detect_sbir_breadth(),
+            # Policy headwind (negative — declining budget areas)
+            "policy_headwind": self.detect_policy_headwind(),
             # SBIR reauthorization (stub — Q4 FY2026)
             "strategic_breakthrough_award": self.detect_strategic_breakthrough_awards(),
         }
@@ -2372,6 +2387,349 @@ class SignalDetector:
             count += 1
 
         return {"contract_value_step_change_signals": count}
+
+    def detect_contract_acceleration(
+        self,
+        acceleration_threshold: float = 3.0,
+        min_recent_value: float = 500_000,
+        min_recent_contracts: int = 2,
+        window_months: int = 24,
+    ) -> dict:
+        """
+        Detect startups with significant contract value acceleration.
+
+        Compares contract value in the most recent window_months vs the prior
+        window_months. Fires when recent period shows 3x+ growth with material
+        contract value — capturing the R&D-to-production transition.
+
+        Args:
+            acceleration_threshold: Minimum ratio of recent/prior (default 3.0)
+            min_recent_value: Minimum total recent contract value (default $500K)
+            min_recent_contracts: Minimum contracts in recent period (default 2)
+            window_months: Size of each comparison window in months (default 24)
+
+        Weight: +2.0, Decay: FAST_DECAY
+        """
+        count = 0
+        today = date.today()
+        recent_start = today - timedelta(days=window_months * 30)
+        prior_start = recent_start - timedelta(days=window_months * 30)
+
+        startups = self.db.query(Entity).filter(
+            Entity.entity_type == EntityType.STARTUP,
+            Entity.merged_into_id.is_(None),
+        ).all()
+
+        startup_ids = {e.id for e in startups}
+        startup_map = {e.id: e for e in startups}
+
+        # Pre-fetch all dated contracts with positive values for startups
+        all_contracts = self.db.query(Contract).filter(
+            Contract.entity_id.in_(startup_ids),
+            Contract.contract_value > 0,
+            Contract.award_date.isnot(None),
+        ).all()
+
+        from collections import defaultdict
+        entity_contracts = defaultdict(list)
+        for c in all_contracts:
+            entity_contracts[c.entity_id].append(c)
+
+        for entity_id, contracts in entity_contracts.items():
+            # Split into recent and prior windows
+            recent = [c for c in contracts if c.award_date >= recent_start]
+            prior = [c for c in contracts if prior_start <= c.award_date < recent_start]
+
+            # Must have enough recent contracts
+            if len(recent) < min_recent_contracts:
+                continue
+
+            recent_total = sum(float(c.contract_value) for c in recent)
+            prior_total = sum(float(c.contract_value) for c in prior)
+
+            # Materiality check
+            if recent_total < min_recent_value:
+                continue
+
+            # Calculate acceleration ratio
+            if prior_total > 0:
+                ratio = recent_total / prior_total
+            elif recent_total >= min_recent_value:
+                # No prior contracts but material recent value = new entrant ramp
+                ratio = recent_total / min_recent_value * acceleration_threshold
+            else:
+                continue
+
+            if ratio < acceleration_threshold:
+                continue
+
+            # Confidence scaled by ratio: 3x=0.60, 5x=0.75, 10x+=0.90
+            if ratio >= 10:
+                confidence = HIGH_CONFIDENCE
+            else:
+                confidence = Decimal(str(round(
+                    min(0.90, 0.60 + (ratio - acceleration_threshold) * 0.05), 2
+                )))
+
+            # Find largest recent contract for evidence
+            largest = max(recent, key=lambda c: float(c.contract_value))
+            most_recent = max(recent, key=lambda c: c.award_date)
+
+            entity = startup_map.get(entity_id)
+            if not entity:
+                continue
+
+            self._create_or_update_signal(
+                entity_id=entity_id,
+                signal_type=SIGNAL_CONTRACT_ACCELERATION,
+                confidence=confidence,
+                detected_date=most_recent.award_date,
+                evidence={
+                    "recent_24mo_value": round(recent_total, 2),
+                    "prior_24mo_value": round(prior_total, 2),
+                    "acceleration_ratio": round(ratio, 2),
+                    "recent_contract_count": len(recent),
+                    "prior_contract_count": len(prior),
+                    "largest_recent_contract": {
+                        "agency": largest.contracting_agency,
+                        "value": float(largest.contract_value),
+                        "date": str(largest.award_date),
+                    },
+                    "entity_name": entity.canonical_name,
+                },
+            )
+            count += 1
+
+        return {"contract_acceleration_signals": count}
+
+    def detect_sbir_breadth(
+        self,
+        min_branches: int = 4,
+        min_tech_clusters: int = 3,
+    ) -> dict:
+        """
+        Detect startups with SBIR awards spanning multiple agencies/branches
+        AND multiple technology domains — indicating broad government validation.
+
+        Fires when:
+          - Entity has SBIR Phase I/II awards from 4+ distinct branches
+          - Entity has 3+ distinct technology tags (populated by SBIR scraper)
+          - Skips entities where multi_agency_interest already covers the same
+            evidence basis (same agencies, no additional tech cluster info)
+
+        Confidence: 4 branches=0.60, 6+=0.85, 8+=0.95
+        Weight: +1.5, Decay: NO_DECAY
+        """
+        count = 0
+
+        # Load existing multi_agency signals for dedup check
+        multi_agency_signals = self.db.query(Signal).filter(
+            Signal.signal_type == SIGNAL_MULTI_AGENCY,
+            Signal.status == SignalStatus.ACTIVE,
+        ).all()
+        multi_agency_map = {s.entity_id: s for s in multi_agency_signals}
+
+        startups = self.db.query(Entity).filter(
+            Entity.entity_type == EntityType.STARTUP,
+            Entity.merged_into_id.is_(None),
+        ).all()
+        startup_map = {e.id: e for e in startups}
+
+        # Pre-fetch all SBIR Phase I/II events for startups
+        sbir_events = self.db.query(FundingEvent).filter(
+            FundingEvent.event_type.in_([
+                FundingEventType.SBIR_PHASE_1,
+                FundingEventType.SBIR_PHASE_2,
+            ]),
+            FundingEvent.entity_id.in_(list(startup_map.keys())),
+        ).all()
+
+        # Group by entity
+        from collections import defaultdict
+        entity_sbirs = defaultdict(list)
+        for ev in sbir_events:
+            entity_sbirs[ev.entity_id].append(ev)
+
+        for entity_id, events in entity_sbirs.items():
+            entity = startup_map.get(entity_id)
+            if not entity:
+                continue
+
+            # Extract distinct branches from SBIR raw_data
+            branches = set()
+            sbir_count_by_branch = defaultdict(int)
+            example_titles_by_branch = defaultdict(list)
+            for ev in events:
+                rd = ev.raw_data or {}
+                branch = rd.get("Branch", rd.get("branch", ""))
+                if branch:
+                    branches.add(branch)
+                    sbir_count_by_branch[branch] += 1
+                    title = rd.get("Award Title", rd.get("award_title", ""))
+                    if title and len(example_titles_by_branch[branch]) < 2:
+                        example_titles_by_branch[branch].append(title[:100])
+
+            if len(branches) < min_branches:
+                continue
+
+            # Check technology cluster diversity from entity tags
+            tech_tags = entity.technology_tags or []
+            if len(tech_tags) < min_tech_clusters:
+                continue
+
+            # Dedup: skip if multi_agency covers same evidence and breadth adds nothing
+            ma_signal = multi_agency_map.get(entity_id)
+            if ma_signal:
+                ma_evidence = ma_signal.evidence or {}
+                ma_agencies = set(ma_evidence.get("agencies", []))
+                # If multi_agency already has same or more agencies AND entity
+                # has no tech diversity beyond what multi_agency implies, skip
+                if ma_agencies >= branches and len(tech_tags) < min_tech_clusters + 1:
+                    continue
+
+            # Confidence scaled by branch count
+            if len(branches) >= 8:
+                confidence = Decimal("0.95")
+            elif len(branches) >= 6:
+                confidence = Decimal("0.85")
+            else:
+                confidence = Decimal(str(round(
+                    0.60 + (len(branches) - min_branches) * 0.125, 2
+                )))
+
+            # Find most recent SBIR date for detected_date
+            dated = [ev for ev in events if ev.event_date]
+            detected = max(ev.event_date for ev in dated) if dated else date.today()
+
+            self._create_or_update_signal(
+                entity_id=entity_id,
+                signal_type=SIGNAL_SBIR_BREADTH,
+                confidence=confidence,
+                detected_date=detected,
+                evidence={
+                    "agencies": sorted(branches),
+                    "agency_count": len(branches),
+                    "technology_areas": sorted(tech_tags),
+                    "tech_cluster_count": len(tech_tags),
+                    "sbir_count_by_agency": dict(sbir_count_by_branch),
+                    "total_sbir_awards": len(events),
+                    "example_titles_by_agency": {
+                        k: v for k, v in sorted(
+                            example_titles_by_branch.items(),
+                            key=lambda x: -sbir_count_by_branch[x[0]],
+                        )[:5]
+                    },
+                    "entity_name": entity.canonical_name,
+                },
+            )
+            count += 1
+
+        return {"sbir_breadth_signals": count}
+
+    def detect_policy_headwind(
+        self,
+        min_score: float = 0.5,
+        max_fy_growth: float = 0.0,
+    ) -> dict:
+        """
+        Detect entities whose primary policy alignment maps to DECLINING budget areas.
+
+        Fires when:
+          - Entity's highest-scoring policy priority has negative FY growth
+          - Entity scores >= min_score in that area (genuinely focused, not noise)
+
+        Args:
+            min_score: Minimum alignment score in the declining area (default 0.5)
+            max_fy_growth: Maximum FY growth rate to qualify as headwind (default 0.0 = negative only)
+
+        This is a NEGATIVE signal (risk indicator).
+        Weight: -1.5, Decay: NO_DECAY (structural — budget trends persist across FY cycles)
+        """
+        config_path = Path(__file__).parent.parent / "config" / "policy_priorities.yaml"
+        with open(config_path) as f:
+            config = yaml.safe_load(f)
+
+        # Parse FY growth rates from config
+        fy_growth = {}
+        budget_weights = {}
+        for area, data in config.get("budget_priorities", {}).items():
+            growth_str = data.get("fy26_growth", "+0%")
+            growth_val = float(growth_str.replace("%", "").replace("+", ""))
+            fy_growth[area] = growth_val
+            budget_weights[area] = data.get("weight", 0.0)
+
+        # Identify declining areas
+        declining_areas = {
+            area: growth for area, growth in fy_growth.items()
+            if growth <= max_fy_growth
+        }
+        if not declining_areas:
+            logger.info("policy_headwind: no budget areas with FY growth <= %.0f%%", max_fy_growth)
+            return {"policy_headwind_signals": 0}
+
+        logger.info(
+            "policy_headwind: declining areas (growth <= %.0f%%): %s",
+            max_fy_growth,
+            {k: f"{v:+.0f}%" for k, v in declining_areas.items()},
+        )
+
+        count = 0
+        entities = self.db.query(Entity).filter(
+            Entity.entity_type == EntityType.STARTUP,
+            Entity.merged_into_id.is_(None),
+            Entity.policy_alignment.isnot(None),
+        ).all()
+
+        for entity in entities:
+            pa = entity.policy_alignment
+            if not pa or not isinstance(pa, dict):
+                continue
+
+            scores = pa.get("scores", {})
+            if not scores:
+                continue
+
+            # Find entity's top priority
+            top_priority = max(scores, key=scores.get)
+            top_score = scores[top_priority]
+
+            if top_priority not in declining_areas:
+                continue
+
+            if top_score < min_score:
+                continue
+
+            area_growth = declining_areas[top_priority]
+            area_weight = budget_weights.get(top_priority, 0.0)
+
+            # Confidence: base from inverse budget weight + bonus from entity's focus depth
+            # Lower budget weight = area is more marginal = stronger headwind signal
+            # Higher entity score = more concentrated in the declining area
+            base = 0.50 + (1.0 - area_weight) * 0.20
+            score_bonus = (top_score - min_score) * 0.40
+            confidence = min(
+                HIGH_CONFIDENCE,
+                Decimal(str(round(base + score_bonus, 2))),
+            )
+
+            self._create_or_update_signal(
+                entity_id=entity.id,
+                signal_type=SIGNAL_POLICY_HEADWIND,
+                confidence=confidence,
+                detected_date=date.today(),
+                evidence={
+                    "declining_priority": top_priority,
+                    "entity_score_in_area": top_score,
+                    "fy_growth_rate": f"{area_growth:+.0f}%",
+                    "budget_weight": area_weight,
+                    "policy_tailwind_score": pa.get("policy_tailwind_score"),
+                    "all_scores": scores,
+                    "entity_name": entity.canonical_name,
+                },
+            )
+            count += 1
+
+        return {"policy_headwind_signals": count}
 
     def detect_strategic_breakthrough_awards(self, entity_ids=None):
         """

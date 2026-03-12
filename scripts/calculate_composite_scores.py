@@ -53,6 +53,9 @@ from processing.signal_detector import (
     SIGNAL_MULTI_VEHICLE_PRESENCE,
     SIGNAL_CONTRACT_VALUE_STEP_CHANGE,
     SIGNAL_STRATEGIC_BREAKTHROUGH_AWARD,
+    SIGNAL_POLICY_HEADWIND,
+    SIGNAL_CONTRACT_ACCELERATION,
+    SIGNAL_SBIR_BREADTH,
 )
 
 # Positive signal weights
@@ -82,6 +85,8 @@ POSITIVE_WEIGHTS = {
     SIGNAL_CONTRACT_VALUE_STEP_CHANGE: 2.0,  # Step-change in contract size
     # SBIR reauthorization (March 2026)
     SIGNAL_STRATEGIC_BREAKTHROUGH_AWARD: 3.5,  # Highest — matching capital = venture-ready by design
+    SIGNAL_CONTRACT_ACCELERATION: 2.0,           # Contract value ramping significantly
+    SIGNAL_SBIR_BREADTH: 1.5,                    # Broad SBIR validation across agencies/domains
 }
 
 # Negative signal weights (subtracted from score)
@@ -90,6 +95,7 @@ NEGATIVE_WEIGHTS = {
     SIGNAL_CUSTOMER_CONCENTRATION: -1.5,
     SIGNAL_GONE_STALE: -1.5,
     SIGNAL_SBIR_LAPSE_RISK: -1.5,  # SBIR-dependent with no diversification
+    SIGNAL_POLICY_HEADWIND: -1.5,  # Aligned to declining budget areas
 }
 
 ALL_WEIGHTS = {**POSITIVE_WEIGHTS, **NEGATIVE_WEIGHTS}
@@ -131,6 +137,7 @@ SIGNAL_DECAY_PROFILES = {
     SIGNAL_MEIA_EXPERIMENTATION: FAST_DECAY,
     SIGNAL_SBIR_LAPSE_RISK: FAST_DECAY,
     SIGNAL_CONTRACT_VALUE_STEP_CHANGE: FAST_DECAY,  # Momentum — stale after 12mo
+    SIGNAL_CONTRACT_ACCELERATION: FAST_DECAY,       # Momentum — recent ramp matters
 
     # Slow decay — milestone signals
     SIGNAL_SBIR_PHASE_2: SLOW_DECAY,
@@ -155,6 +162,8 @@ SIGNAL_DECAY_PROFILES = {
     SIGNAL_PAE_PORTFOLIO: NO_DECAY,
     SIGNAL_COMMERCIAL_PATHWAY: NO_DECAY,
     SIGNAL_MULTI_VEHICLE_PRESENCE: NO_DECAY,  # Structural — multi-vehicle is persistent
+    SIGNAL_SBIR_BREADTH: NO_DECAY,            # Structural — SBIR portfolio breadth is persistent
+    SIGNAL_POLICY_HEADWIND: NO_DECAY,        # Structural — budget trends persist across FY cycles
     SIGNAL_STRATEGIC_BREAKTHROUGH_AWARD: SLOW_DECAY,  # Milestone — matching capital committed
 }
 
